@@ -1,7 +1,18 @@
-﻿"use strict";
+"use strict";
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
-// 濞插褰嶉崡?- 閸樺棗褰剁拋鏉跨秿妞ょ绱濈仦鏇犮仛閹殿偅寮块崢鍡楀蕉
-const toast_1 = require("@vant/weapp/toast/toast");
+const toast_1 = __importDefault(require("@vant/weapp/toast/toast"));
 const history_1 = require("../../services/history");
 Page({
     data: {
@@ -10,42 +21,45 @@ Page({
     onShow() {
         this.loadHistory();
     },
-    async loadHistory() {
-        const list = await (0, history_1.getRecentRecords)(50);
-        this.setData({ list });
+    loadHistory() {
+        return __awaiter(this, void 0, void 0, function* () {
+            const list = yield (0, history_1.getRecentRecords)(50);
+            this.setData({ list });
+        });
     },
-    /** 閻愮懓鍤崢鍡楀蕉鐠佹澘缍嶉弶锛勬窗 */
     onRecordTap(e) {
         const ds = e.currentTarget.dataset;
         const recordId = (ds.recordId || ds.recordid || "");
         if (recordId) {
             wx.navigateTo({
-                url: `/pages/menu-list/menu-list?recordId=${recordId}`,
+                url: `/pages/menu-list/menu-list?recordId=${recordId}&from=history`,
             });
         }
     },
-    async onDeleteRecord(e) {
-        const ds = e.currentTarget.dataset;
-        const recordId = (ds.recordId || ds.recordid || "");
-        if (!recordId)
-            return;
-        const modalRes = await wx.showModal({
-            title: "删除记录",
-            content: "确认删除这条识别记录吗？删除后不可恢复。",
-            confirmText: "删除",
-            confirmColor: "#ee0a24",
-            cancelText: "取消",
+    onDeleteRecord(e) {
+        return __awaiter(this, void 0, void 0, function* () {
+            const ds = e.currentTarget.dataset;
+            const recordId = (ds.recordId || ds.recordid || "");
+            if (!recordId)
+                return;
+            const modalRes = yield wx.showModal({
+                title: "删除记录",
+                content: "确认删除这条识别记录吗？删除后不可恢复。",
+                confirmText: "删除",
+                confirmColor: "#ee0a24",
+                cancelText: "取消",
+            });
+            if (!modalRes.confirm)
+                return;
+            const ok = yield (0, history_1.deleteRecordById)(recordId);
+            if (!ok) {
+                toast_1.default.fail("删除失败，请重试");
+                return;
+            }
+            this.setData({
+                list: this.data.list.filter((item) => item._id !== recordId),
+            });
+            toast_1.default.success("已删除");
         });
-        if (!modalRes.confirm)
-            return;
-        const ok = await (0, history_1.deleteRecordById)(recordId);
-        if (!ok) {
-            toast_1.default.fail("删除失败，请重试");
-            return;
-        }
-        this.setData({
-            list: this.data.list.filter((item) => item._id !== recordId),
-        });
-        toast_1.default.success("已删除");
     },
 });

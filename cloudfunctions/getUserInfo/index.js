@@ -19,10 +19,23 @@ exports.main = async (event) => {
   const users = db.collection("users");
 
   if (event.action === "consume") {
-    const { data } = await users.where({ _openid: openid }).get();
-    const user = data[0];
+    let { data } = await users.where({ _openid: openid }).get();
+    let user = data[0];
     if (!user) {
-      return { success: false, error: "用户不存在" };
+      // Auto-create user (same as init branch)
+      await users.add({
+        data: {
+          _openid: openid,
+          dailyUsage: 0,
+          lastUsageDate: today,
+          createdAt: db.serverDate(),
+        },
+      });
+      const { data: newData } = await users.where({ _openid: openid }).get();
+      if (!newData || newData.length === 0) {
+        return { success: false, error: "用户数据创建失败，请重试" };
+      }
+      user = newData[0];
     }
     const lastDate = user.lastUsageDate || "";
     const dailyUsage = lastDate === today ? (user.dailyUsage || 0) : 0;
@@ -51,6 +64,10 @@ exports.main = async (event) => {
       },
     });
     const { data: newData } = await users.where({ _openid: openid }).get();
+    // Guard: insert may fail silently or return empty; avoid crash on newData[0]
+    if (!newData || newData.length === 0) {
+      return { success: false, error: "用户数据创建失败，请重试" };
+    }
     user = newData[0];
   } else if (user.lastUsageDate !== today) {
     await users.where({ _openid: openid }).update({

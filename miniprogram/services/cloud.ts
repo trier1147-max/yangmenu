@@ -22,6 +22,25 @@ export async function callFunction<T>(
   }
 }
 
+/** 检查并消耗当日使用次数 */
+export type ConsumeDailyUsageResult =
+  | { success: true; canProceed: true }
+  | { success: true; canProceed: false; remaining: 0 }
+  | { success: false; error: string };
+
+export async function consumeDailyUsage(): Promise<ConsumeDailyUsageResult> {
+  const res = await callFunction<{ success?: boolean; error?: string }>("getUserInfo", {
+    action: "consume",
+  });
+  if (res.success === true) {
+    return { success: true, canProceed: true };
+  }
+  if (res.error === "今日次数已用完") {
+    return { success: true, canProceed: false, remaining: 0 };
+  }
+  return { success: false, error: res.error ?? "未知错误" };
+}
+
 /** 上传图片到云存储，返回 fileID */
 export async function uploadImage(filePath: string): Promise<string> {
   try {

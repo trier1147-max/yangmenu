@@ -65,7 +65,7 @@
   <view class="index__header">
     <view class="brand">
       <view class="brand__row">
-        <image class="brand__logo" src="/images/logo.webp" mode="aspectFit" />
+        <image class="brand__logo" src="/images/logo.png" mode="aspectFit" />
         <text class="brand__zh">洋菜单</text>
         <text class="brand__en">YangMenu</text>
       </view>
@@ -75,7 +75,7 @@
 
   <view class="ai-scanner-wrap">
     <view class="ai-orb-ring">
-      <view class="ai-orb" bindtap="onTakePhoto" hover-class="hover-scale">
+      <view class="ai-orb {{isProcessing ? 'ai-orb--disabled' : ''}}" bindtap="onTakePhoto" hover-class="hover-scale">
         <view class="ai-orb-inner">
           <van-icon name="photograph" size="72" color="#FFFFFF" />
         </view>
@@ -92,11 +92,11 @@
   </view>
 
   <view class="secondary-actions">
-    <view class="btn-pill card" bindtap="onChooseAlbum" hover-class="hover-scale">
+    <view class="btn-pill card {{isProcessing ? 'btn-pill--disabled' : ''}}" bindtap="onChooseAlbum" hover-class="hover-scale">
       <van-icon name="photo" size="20" class="btn-icon" />
       <text class="btn-text">相册选图</text>
     </view>
-    <view class="btn-pill card" bindtap="onManualInput" hover-class="hover-scale">
+    <view class="btn-pill card {{isProcessing ? 'btn-pill--disabled' : ''}}" bindtap="onManualInput" hover-class="hover-scale">
       <van-icon name="edit" size="20" class="btn-icon" />
       <text class="btn-text">手动输入</text>
     </view>

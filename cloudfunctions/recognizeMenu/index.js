@@ -230,6 +230,27 @@ ${DEEPSEEK_PROMPT}`;
 
     options.agent = SHARED_HTTP_AGENT;
     const req = https.request(options, (res) => {
+      const statusCode = res.statusCode || 0;
+      const isErrorStatus = statusCode < 200 || statusCode >= 300;
+
+      if (isErrorStatus) {
+        let errBuf = "";
+        res.on("data", (chunk) => { errBuf += chunk.toString(); });
+        res.on("end", () => {
+          let friendlyMsg = `识别失败（错误码：${statusCode}），请重试`;
+          try {
+            const errJson = errBuf ? JSON.parse(errBuf) : {};
+            const apiMsg = errJson.error?.message || errJson.message;
+            if (statusCode === 429) friendlyMsg = "服务繁忙，请稍后再试";
+            else if (statusCode === 401) friendlyMsg = "服务配置异常，请联系开发者";
+            else if ([500, 502, 503].includes(statusCode)) friendlyMsg = "识别服务暂时不可用，请稍后再试";
+            else if (apiMsg) friendlyMsg = apiMsg;
+          } catch (_) {}
+          reject(new Error(friendlyMsg));
+        });
+        return;
+      }
+
       let buf = "";
       res.on("data", (chunk) => {
         buf += chunk.toString();
@@ -490,7 +511,20 @@ exports.main = async (event) => {
         name: "recognizeMenu",
         data: { imageFileID, streamRecordId: recordId },
       })
-      .catch((e) => console.error("recognizeMenu stream invoke error:", e));
+      .catch(async (e) => {
+        console.error("Stream worker invocation failed:", e);
+        try {
+          await db.collection("scan_records").doc(recordId).update({
+            data: {
+              status: "error",
+              errorMessage: "识别服务启动失败，请重试",
+              updatedAt: new Date(),
+            },
+          });
+        } catch (dbErr) {
+          console.error("Failed to update record on worker error:", dbErr);
+        }
+      });
 
     return { success: true, data: { recordId, stream: true } };
   }

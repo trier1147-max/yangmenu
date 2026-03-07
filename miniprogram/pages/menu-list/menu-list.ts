@@ -1,3 +1,4 @@
+import type { AppOption } from "../../app";
 import { getRecordById } from "../../services/history";
 import type { Dish, ScanRecordStatus } from "../../utils/types";
 
@@ -325,13 +326,27 @@ Page({
     }, 30000) as unknown as number;
 
     try {
-      const record = await getRecordById(recordId);
+      const app = getApp() as AppOption;
+      const pending = app.globalData?.pendingRecord;
+      let record: ScanRecordLike | null = null;
+
+      if (pending && String(pending._id) === String(recordId)) {
+        app.globalData.pendingRecord = null;
+        record = pending as ScanRecordLike;
+      } else if (pending) {
+        app.globalData.pendingRecord = null;
+      }
+
+      if (!record) {
+        record = await getRecordById(recordId) as ScanRecordLike | null;
+      }
+
       if (!record) {
         this.setData({ initialLoading: false, error: "未找到记录" });
         return;
       }
 
-      this.applyRecord(record as ScanRecordLike);
+      this.applyRecord(record);
       if (record.status === "processing") {
         this.startPolling(recordId);
       }
@@ -573,8 +588,18 @@ Page({
   startPolling(recordId: string) {
     this.stopPolling();
     const intervalMs = 1200;
+    const pollStartTime = Date.now();
 
     const tick = async () => {
+      if (Date.now() - pollStartTime > 90_000) {
+        this.stopPolling();
+        this.setData({
+          processing: false,
+          error: "识别超时，请返回重试",
+        });
+        return;
+      }
+
       try {
         const record = await getRecordById(recordId);
         if (!record) {
@@ -636,7 +661,8 @@ Page({
   onDishTap(e: WechatMiniprogram.TouchEvent) {
     const index = Number(e.currentTarget.dataset.index);
     const { dishes } = this.data;
-    if (index < 0 || index >= dishes.length) return;
+    // Guard: undefined/invalid dataset.index yields NaN; avoid crash on dishes[NaN]
+    if (Number.isNaN(index) || index < 0 || index >= dishes.length) return;
 
     const dish = dishes[index];
     const key = dish.key || this.getDishIdentity(dish, index);

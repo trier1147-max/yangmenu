@@ -15,11 +15,13 @@ exports.main = async (event) => {
       return { success: false, error: "无法获取 openid" };
     }
 
+    const safeDishes = (dishes || []).filter((d) => d != null && typeof d === "object");
+
     const res = await db.collection("scan_records").add({
       data: {
         _openid: openid,
         imageFileID: typeof imageFileID === "string" ? imageFileID : "",
-        dishes: dishes.map((d) => ({
+        dishes: safeDishes.map((d) => ({
           originalName: d.originalName || "",
           briefCN: d.briefCN || "",
           detail: d.detail || {

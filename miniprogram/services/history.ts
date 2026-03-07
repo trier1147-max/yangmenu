@@ -51,18 +51,22 @@ export async function getRecentRecords(
       .limit(limit)
       .get();
 
-    const list = (res.data as ScanRecord[]).map((r) => ({
-      _id: (r as ScanRecord & { _id: string })._id,
-      createdAt: r.createdAt,
-      timeText: formatTime(r.createdAt),
-      dishSummary: (r.dishes ?? [])
-        .slice(0, 3)
-        .map((d) => d.briefCN || d.originalName)
-        .filter(Boolean)
-        .join("、") || "无菜品",
-      dishCount: (r.dishes ?? []).length,
-      imageFileID: r.imageFileID || "",
-    }));
+    const list = (res.data as ScanRecord[]).map((r) => {
+      const raw = r as ScanRecord & { _id: string };
+      const dishesForDisplay = raw.dishes ?? raw.partialDishes ?? [];
+      return {
+        _id: raw._id,
+        createdAt: r.createdAt,
+        timeText: formatTime(r.createdAt),
+        dishSummary: dishesForDisplay
+          .slice(0, 3)
+          .map((d) => d.briefCN || d.originalName)
+          .filter(Boolean)
+          .join("、") || "无菜品",
+        dishCount: dishesForDisplay.length,
+        imageFileID: r.imageFileID || "",
+      };
+    });
     return list;
   } catch (e) {
     console.error("getRecentRecords failed:", e);

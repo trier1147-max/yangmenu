@@ -402,6 +402,7 @@ ${DEEPSEEK_PROMPT}`;
 exports.main = async (event) => {
   const {
     imageFileID,
+    imageFileIDs,
     manualDishNames,
     saveRecord: shouldSave = true,
     debug = false,
@@ -422,7 +423,7 @@ exports.main = async (event) => {
     });
   }
 
-  if (!hasManualInput && !imageFileID && !streamRecordId) {
+  if (!hasManualInput && !imageFileID && !event.imageBase64 && !event.imageFileIDs && !streamRecordId) {
     return { success: false, error: "missing imageFileID" };
   }
   if (!LKEAP_API_KEY) {
@@ -440,30 +441,12 @@ exports.main = async (event) => {
     };
   }
 
-  // stream worker: process and continuously update partialDishes
-  if (streamRecordId && imageFileID) {
+  // ocrText stream worker: AI streaming only (OCR already done in entry, saves double base64 transfer)
+  if (streamRecordId && event.ocrText) {
     const recordId = streamRecordId;
+    const ocrText = event.ocrText;
     const records = db.collection("scan_records");
     try {
-      const urlRes = await cloud.getTempFileURL({ fileList: [imageFileID] });
-      const fileItem = urlRes?.fileList?.[0];
-      const imageUrl = fileItem?.tempFileURL || fileItem?.temp_file_url;
-      if (!imageUrl || (fileItem?.code && fileItem.code !== "SUCCESS")) {
-        await records.doc(recordId).update({
-          data: { status: "error", errorMessage: "get image url failed" },
-        });
-        return { success: false, error: "get image url failed" };
-      }
-
-      const ocrText = await extractTextByOcr(imageUrl);
-      if (!ocrText || ocrText.trim().length === 0) {
-        const msg = "您上传的图片有问题。";
-        await records.doc(recordId).update({
-          data: { status: "error", errorMessage: msg },
-        });
-        return { success: false, error: msg };
-      }
-
       const streamResult = await callDeepSeekStream(ocrText, recordId);
       const aiText = typeof streamResult === "string" ? streamResult : streamResult.text;
       const finishReason = typeof streamResult === "object" ? streamResult.finishReason : null;
@@ -494,7 +477,7 @@ exports.main = async (event) => {
       await records.doc(recordId).update({ data: updateData });
       return { success: true };
     } catch (e) {
-      console.error("recognizeMenu stream worker error:", e);
+      console.error("recognizeMenu ocrText stream worker error:", e);
       try {
         await records.doc(recordId).update({
           data: { status: "error", errorMessage: (e.message || String(e)).slice(0, 200) },
@@ -504,8 +487,194 @@ exports.main = async (event) => {
     }
   }
 
-  // stream entry: create processing record and invoke worker
-  if (useStream && imageFileID) {
+  // batch stream worker: process multiple images sequentially, merge dishes into partialDishes
+  if (streamRecordId && Array.isArray(imageFileIDs) && imageFileIDs.length > 0) {
+    const recordId = streamRecordId;
+    const records = db.collection("scan_records");
+    let allDishes = [];
+    let hasError = false;
+    let menuTooLong = false;
+
+    for (const fileID of imageFileIDs) {
+      try {
+        const urlRes = await cloud.getTempFileURL({ fileList: [fileID] });
+        const fileItem = urlRes?.fileList?.[0];
+        const imageUrl = fileItem?.tempFileURL || fileItem?.temp_file_url;
+        if (!imageUrl || (fileItem?.code && fileItem.code !== "SUCCESS")) {
+          console.warn("batch stream: get image url failed for", fileID);
+          continue;
+        }
+
+        const ocrText = await extractTextByOcr(imageUrl);
+        if (!ocrText || ocrText.trim().length === 0) {
+          console.warn("batch stream: empty OCR for", fileID);
+          continue;
+        }
+
+        const aiText = await callDeepSeekWithText(ocrText);
+        if (!aiText || aiText.trim().length === 0) {
+          console.warn("batch stream: empty AI response for", fileID);
+          continue;
+        }
+
+        const meta = parser.parseAiResponseMeta(aiText);
+        if (meta && meta.isMenu === false) {
+          console.warn("batch stream: not a menu for", fileID);
+          continue;
+        }
+
+        let dishes;
+        try {
+          dishes = parser.parseDishesFromText(aiText);
+        } catch (parseErr) {
+          dishes = parser.parseDishesMinimal(aiText) || parser.parseDishesFallback(aiText) || [];
+        }
+        const ocrPrices = parser.extractPricesFromOcrText(ocrText);
+        if (ocrPrices.length > 0) {
+          dishes = parser.applyPricesByIndex(dishes, ocrPrices);
+        }
+
+        if (dishes.length > 0) {
+          allDishes = allDishes.concat(dishes);
+          // Update partialDishes after each image so frontend can show progress
+          try {
+            await records.doc(recordId).update({
+              data: { partialDishes: allDishes, status: "processing" },
+            });
+          } catch (e) {
+            console.warn("batch stream: updatePartial failed:", e.message);
+          }
+        }
+      } catch (e) {
+        console.error("batch stream: error processing image", fileID, e.message);
+        hasError = true;
+      }
+    }
+
+    // Finalize record
+    try {
+      if (allDishes.length > 0) {
+        const updateData = { dishes: allDishes, status: "done", partialDishes: [] };
+        if (menuTooLong) {
+          updateData.menuTooLongHint = "当前菜单太长，识别不完整。请你分段拍摄，以获取最佳体验。";
+        }
+        await records.doc(recordId).update({ data: updateData });
+      } else {
+        await records.doc(recordId).update({
+          data: { status: "error", errorMessage: "未识别到有效菜品" },
+        });
+      }
+    } catch (e) {
+      console.error("batch stream: finalize failed:", e.message);
+    }
+    return { success: true };
+  }
+
+  // single imageFileID stream worker: get URL, OCR, then AI stream (for large images that exceed base64 limit)
+  if (streamRecordId && imageFileID && !Array.isArray(imageFileIDs)) {
+    const recordId = streamRecordId;
+    const records = db.collection("scan_records");
+    try {
+      const urlRes = await cloud.getTempFileURL({ fileList: [imageFileID] });
+      const fileItem = urlRes?.fileList?.[0];
+      const imageUrl = fileItem?.tempFileURL || fileItem?.temp_file_url;
+      if (!imageUrl || (fileItem?.code && fileItem.code !== "SUCCESS")) {
+        await records.doc(recordId).update({
+          data: { status: "error", errorMessage: "获取图片失败" },
+        });
+        return { success: false, error: "get image url failed" };
+      }
+      const ocrText = await extractTextByOcr(imageUrl);
+      if (!ocrText || ocrText.trim().length === 0) {
+        await records.doc(recordId).update({
+          data: { status: "error", errorMessage: "您上传的图片有问题。" },
+        });
+        return { success: false, error: "OCR empty" };
+      }
+      const streamResult = await callDeepSeekStream(ocrText, recordId);
+      const aiText = typeof streamResult === "string" ? streamResult : streamResult.text;
+      const finishReason = typeof streamResult === "object" ? streamResult.finishReason : null;
+      const ocrTruncated = typeof streamResult === "object" ? streamResult.truncated : false;
+      const menuTooLong = finishReason === "length" || ocrTruncated;
+      const meta = parser.parseAiResponseMeta(aiText);
+      if (meta && meta.isMenu === false) {
+        const msg = "当前图片似乎不是菜单，请拍摄餐厅菜单进行识别";
+        await records.doc(recordId).update({
+          data: { status: "error", errorMessage: msg },
+        });
+        return { success: false, error: msg };
+      }
+      let dishes = [];
+      try {
+        dishes = parser.parseDishesFromText(aiText);
+      } catch (parseErr) {
+        dishes = parser.parseDishesMinimal(aiText) || parser.parseDishesFallback(aiText) || [];
+      }
+      const ocrPrices = parser.extractPricesFromOcrText(ocrText);
+      if (ocrPrices.length > 0) {
+        dishes = parser.applyPricesByIndex(dishes, ocrPrices);
+      }
+      const updateData = { dishes, status: "done", partialDishes: [] };
+      if (menuTooLong) {
+        updateData.menuTooLongHint = "当前菜单太长，识别不完整。请你分段拍摄，以获取最佳体验。";
+      }
+      await records.doc(recordId).update({ data: updateData });
+      return { success: true };
+    } catch (e) {
+      console.error("recognizeMenu single imageFileID stream worker error:", e);
+      try {
+        await records.doc(recordId).update({
+          data: { status: "error", errorMessage: (e.message || String(e)).slice(0, 200) },
+        });
+      } catch (_) {}
+      return { success: false, error: e.message || String(e) };
+    }
+  }
+
+  // batch stream entry: create processing record and invoke batch worker
+  if (useStream && Array.isArray(imageFileIDs) && imageFileIDs.length > 0) {
+    const wxContext = cloud.getWXContext();
+    const openid = wxContext.OPENID;
+    if (!openid) return { success: false, error: "failed to get openid" };
+
+    const records = db.collection("scan_records");
+    const addRes = await records.add({
+      data: {
+        _openid: openid,
+        imageFileID: imageFileIDs[0],
+        dishes: [],
+        partialDishes: [],
+        status: "processing",
+        createdAt: db.serverDate(),
+      },
+    });
+    const recordId = addRes._id ?? addRes.id;
+
+    cloud
+      .callFunction({
+        name: "recognizeMenu",
+        data: { imageFileIDs, streamRecordId: recordId },
+      })
+      .catch(async (e) => {
+        console.error("Batch stream worker invocation failed:", e);
+        try {
+          await db.collection("scan_records").doc(recordId).update({
+            data: {
+              status: "error",
+              errorMessage: "识别服务启动失败，请重试",
+              updatedAt: new Date(),
+            },
+          });
+        } catch (dbErr) {
+          console.error("Failed to update record on batch worker error:", dbErr);
+        }
+      });
+
+    return { success: true, data: { recordId, stream: true } };
+  }
+
+  // single imageFileID stream entry: for large images that exceed base64 limit (upload first, then stream)
+  if (useStream && imageFileID && !event.imageBase64) {
     const wxContext = cloud.getWXContext();
     const openid = wxContext.OPENID;
     if (!openid) return { success: false, error: "failed to get openid" };
@@ -527,6 +696,60 @@ exports.main = async (event) => {
       .callFunction({
         name: "recognizeMenu",
         data: { imageFileID, streamRecordId: recordId },
+      })
+      .catch(async (e) => {
+        console.error("Single imageFileID stream worker invocation failed:", e);
+        try {
+          await db.collection("scan_records").doc(recordId).update({
+            data: {
+              status: "error",
+              errorMessage: "识别服务启动失败，请重试",
+              updatedAt: new Date(),
+            },
+          });
+        } catch (dbErr) {
+          console.error("Failed to update record on worker error:", dbErr);
+        }
+      });
+
+    return { success: true, data: { recordId, stream: true } };
+  }
+
+  // base64 stream entry: do OCR in entry, pass ocrText (tiny) to worker instead of base64 (large)
+  if (useStream && event.imageBase64) {
+    const wxContext = cloud.getWXContext();
+    const openid = wxContext.OPENID;
+    if (!openid) return { success: false, error: "failed to get openid" };
+
+    // OCR 在 entry 里做，避免 base64 二次传输给 worker（省 ~1-2s）
+    let ocrText;
+    try {
+      ocrText = await extractTextByOcr(event.imageBase64);
+    } catch (e) {
+      return { success: false, error: e.message || "OCR 识别失败" };
+    }
+    if (!ocrText || ocrText.trim().length === 0) {
+      return { success: false, error: "您上传的图片有问题。" };
+    }
+
+    const records = db.collection("scan_records");
+    const addRes = await records.add({
+      data: {
+        _openid: openid,
+        imageFileID: "",
+        dishes: [],
+        partialDishes: [],
+        status: "processing",
+        createdAt: db.serverDate(),
+      },
+    });
+    const recordId = addRes._id ?? addRes.id;
+
+    // 只传 ocrText（几KB）给 worker，不传 base64（几百KB）
+    cloud
+      .callFunction({
+        name: "recognizeMenu",
+        data: { ocrText, streamRecordId: recordId },
       })
       .catch(async (e) => {
         console.error("Stream worker invocation failed:", e);

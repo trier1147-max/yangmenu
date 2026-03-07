@@ -114,14 +114,14 @@ page {
   z-index: 1;
 }
 
-/* 顶部暖色渐变装饰（改为极淡灰，不抢主按钮） */
+/* 顶部暖色渐变装饰（奶白暖调，与背景协调） */
 .index__warm-bg {
   position: absolute;
   top: 0;
   left: 0;
   right: 0;
   height: 500rpx;
-  background: radial-gradient(ellipse 80% 60% at 50% 0%, rgba(0, 0, 0, 0.02) 0%, transparent 70%);
+  background: radial-gradient(ellipse 80% 60% at 50% 0%, rgba(255, 248, 240, 0.6) 0%, transparent 70%);
   pointer-events: none;
 }
 
@@ -495,14 +495,14 @@ page {
   color: var(--text-sub);
 }
 
-/* Apple-style Loading 毛玻璃遮罩 */
+/* Apple-style Loading 毛玻璃遮罩（暖奶白） */
 .index__overlay {
   position: fixed;
   top: 0;
   left: 0;
   right: 0;
   bottom: 0;
-  background-color: rgba(242, 242, 247, 0.4);
+  background-color: rgba(255, 251, 247, 0.5);
   background-image: var(--glass-noise);
   backdrop-filter: blur(40px) saturate(150%);
   -webkit-backdrop-filter: blur(40px) saturate(150%);
@@ -513,7 +513,7 @@ page {
 }
 
 .index__loading-box {
-  background-color: rgba(255, 255, 255, 0.6);
+  background-color: rgba(255, 251, 247, 0.75);
   background-image: var(--glass-noise);
   backdrop-filter: blur(40px) saturate(150%);
   -webkit-backdrop-filter: blur(40px) saturate(150%);

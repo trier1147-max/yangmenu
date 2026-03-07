@@ -1,19 +1,20 @@
 import Toast from "@vant/weapp/toast/toast";
 import type { AppOption } from "../../app";
 import {
-  recognizeMenu,
   recognizeManualDishes,
+  recognizeMenuBase64Stream,
+  recognizeMenuBatchStream,
   recognizeMenuStream,
-  saveRecord,
   uploadImage,
 } from "../../services/ai";
 import { deleteRecordById, getRecentRecords } from "../../services/history";
 import { checkUsage, consumeUsage, addShareBonus } from "../../services/user";
-import type { Dish } from "../../utils/types";
 import type { RecentRecordItem } from "../../services/history";
 
 const MAX_IMAGE_SIZE_BYTES = 4 * 1024 * 1024; // 4MB
 const ALLOWED_EXTENSIONS = ["jpg", "jpeg", "png"];
+/** base64 超限时兜底走上传流式；降低到 150KB 避免边界情况（某些图片压缩效果差）*/
+const BASE64_CALL_LIMIT = 150_000;
 
 interface IndexData {
   recentRecords: RecentRecordItem[];
@@ -34,21 +35,32 @@ interface IndexData {
 function validateImageFiles(
   files: WechatMiniprogram.ChooseMediaSuccessCallbackResult["tempFiles"]
 ): string | null {
+  console.log("[DEBUG] validateImageFiles called, files:", files?.length);
   if (!files || files.length === 0) return null;
   for (const f of files) {
     const size = f.size ?? 0;
-    if (size > MAX_IMAGE_SIZE_BYTES) {
-      return "size";
-    }
     const path = f.tempFilePath || "";
     const ext = path.split(".").pop()?.toLowerCase() ?? "";
+    console.log(`[DEBUG] Validating file: size=${size}B, path=${path}, ext=${ext}, fileType=${f.fileType}`);
+
+    if (size > MAX_IMAGE_SIZE_BYTES) {
+      console.log("[DEBUG] Validation failed: size too large");
+      return "size";
+    }
     const hasExtension = path.includes(".") && ext.length > 0;
     if (hasExtension) {
-      if (!ALLOWED_EXTENSIONS.includes(ext)) return "format";
+      if (!ALLOWED_EXTENSIONS.includes(ext)) {
+        console.log("[DEBUG] Validation failed: invalid extension");
+        return "format";
+      }
     } else {
-      if (f.fileType !== "image") return "format";
+      if (f.fileType !== "image") {
+        console.log("[DEBUG] Validation failed: not an image");
+        return "format";
+      }
     }
   }
+  console.log("[DEBUG] Validation passed");
   return null;
 }
 
@@ -106,6 +118,7 @@ Page({
             count: 6,
             mediaType: ["image"],
             sourceType: ["camera"],
+            sizeType: ["compressed"],
             success: resolve,
             fail: reject,
             complete: () => {
@@ -139,6 +152,7 @@ Page({
   },
 
   async onChooseAlbum() {
+    console.log("[DEBUG] onChooseAlbum called");
     if (this.data.isProcessing) return;
     const usage = await checkUsage();
     if (usage.remaining <= 0) {
@@ -146,12 +160,14 @@ Page({
       return;
     }
     try {
+      console.log("[DEBUG] Starting wx.chooseMedia");
       const res = await new Promise<WechatMiniprogram.ChooseMediaSuccessCallbackResult>(
         (resolve, reject) => {
           wx.chooseMedia({
             count: 6,
             mediaType: ["image"],
             sourceType: ["album"],
+            sizeType: ["compressed"],
             success: resolve,
             fail: reject,
             complete: () => {
@@ -163,7 +179,9 @@ Page({
           });
         }
       );
+      console.log("[DEBUG] Image selected from album, count:", res.tempFiles?.length);
       const valErr = validateImageFiles(res.tempFiles);
+      console.log("[DEBUG] Album validation result:", valErr || "passed");
       if (valErr) {
         wx.showToast({
           title: valErr === "size" ? "图片不能超过4MB，请重新选择" : "仅支持 JPG/PNG 格式",
@@ -172,8 +190,10 @@ Page({
         return;
       }
       this.setData({ isProcessing: true });
+      console.log("[DEBUG] Calling handleMediaResult for album");
       await this.handleMediaResult(res);
     } catch (e: any) {
+      console.error("[DEBUG] onChooseAlbum error:", e);
       const errMsg = e?.errMsg || e?.message || (typeof e === "string" ? e : "");
       if (errMsg.includes("cancel")) return; // 用户主动取消，静默返回
       clearInterval(this.loadingTimer);
@@ -285,9 +305,15 @@ Page({
   async handleMediaResult(
     res: WechatMiniprogram.ChooseMediaSuccessCallbackResult
   ) {
+    console.log("[DEBUG] === handleMediaResult START ===");
     const files = res.tempFiles ?? [];
-    if (files.length === 0) return;
+    console.log("[DEBUG] Files count:", files.length);
+    if (files.length === 0) {
+      console.log("[DEBUG] No files, returning");
+      return;
+    }
 
+    console.log("[DEBUG] Setting loading state");
     this.setData({
       loading: true,
       loadingEmoji: "👨‍🍳",
@@ -315,30 +341,128 @@ Page({
 
     try {
       const filePaths = files.map((f) => f.tempFilePath);
-      const compressed = await Promise.all(
-        filePaths.map((path) =>
-          wx.compressImage({
-            src: path,
-            quality: 50,
-            compressedWidth: 960,
-          })
-        )
-      );
-      const fileIDs = await Promise.all(
-        compressed.map((c) => uploadImage(c.tempFilePath))
+
+      // 压缩所有图片（偏小以控制 base64 体积，确保 callFunction 不超限）
+      const compressedPaths = await Promise.all(
+        filePaths.map(async (path, index) => {
+          const originalFile = files[index];
+          console.log(`[DEBUG] Original image ${index}: size=${originalFile.size}B, type=${originalFile.fileType}`);
+
+          try {
+            // 尝试使用 compressedWidth（需要基础库 2.26.0+）
+            const c = await wx.compressImage({
+              src: path,
+              quality: 40,
+              compressedWidth: 800
+            });
+            // 检查压缩后的文件大小
+            try {
+              const fs = wx.getFileSystemManager();
+              const stats = fs.statSync(c.tempFilePath);
+              console.log(`[DEBUG] Compressed image ${index}: size=${stats.size}B`);
+            } catch (e) {}
+            return c.tempFilePath;
+          } catch (e: any) {
+            // 降级：如果 compressedWidth 不支持，只用 quality 压缩
+            console.warn("compressImage with width failed, fallback to quality only:", e);
+            try {
+              const c = await wx.compressImage({ src: path, quality: 40 });
+              return c.tempFilePath;
+            } catch (e2) {
+              // 如果压缩完全失败，返回原图（后续会通过上传路径处理）
+              console.error("compressImage completely failed, using original:", e2);
+              return path;
+            }
+          }
+        })
       );
 
-      const allDishes: Dish[] = [];
       let recordId: string | null = null;
       let lastError = "";
 
-      if (fileIDs.length === 1) {
-        const streamRes = await recognizeMenuStream(fileIDs[0]);
-        recordId = streamRes.recordId ?? null;
-        if (streamRes.error) lastError = streamRes.error;
+      if (compressedPaths.length === 1) {
+        let useBase64 = false;
+
+        // 尝试 base64 路径：快速但可能因体积/格式失败
+        try {
+          const fs = wx.getFileSystemManager();
+          const base64 = fs.readFileSync(compressedPaths[0], "base64") as string;
+
+          console.log(`[DEBUG] base64 size: ${base64.length} chars, limit: ${BASE64_CALL_LIMIT}`);
+
+          if (base64.length <= BASE64_CALL_LIMIT) {
+            const streamRes = await recognizeMenuBase64Stream(base64);
+            if (streamRes.recordId) {
+              recordId = streamRes.recordId;
+              useBase64 = true;
+              console.log("[DEBUG] base64 path success");
+            } else {
+              console.warn("[DEBUG] base64 path failed:", streamRes.error);
+            }
+            // base64 失败时静默降级，不设置 lastError（让上传路径有机会成功）
+          } else {
+            console.log("[DEBUG] base64 too large, skip to upload path");
+          }
+        } catch (e) {
+          // base64 读取或调用失败，降级到上传路径
+          console.warn("base64 path failed, fallback to upload:", e);
+        }
+
+        // 降级路径：上传到云存储后识别（更稳定）
+        if (!recordId) {
+          console.log("[DEBUG] using upload fallback path");
+          const fileID = await uploadImage(compressedPaths[0]);
+          console.log("[DEBUG] upload success, fileID:", fileID);
+          const streamRes = await recognizeMenuStream(fileID);
+          recordId = streamRes.recordId ?? null;
+          if (streamRes.recordId) {
+            console.log("[DEBUG] upload path success");
+          } else {
+            console.error("[DEBUG] upload path failed:", streamRes.error);
+          }
+          if (streamRes.error) lastError = streamRes.error;
+        }
+
         if (recordId) {
-          // 妙招：拿到 recordId 后立即跳转详情页，不再在加载页等待首道菜
-          // 详情页会轮询展示流式菜品，用户能更快看到结果页
+          // base64 路径：entry 不保存 imageFileID，后台补传
+          if (useBase64) {
+            uploadImage(compressedPaths[0]).then((fileID) => {
+              wx.cloud.database().collection("scan_records").doc(recordId!).update({
+                data: { imageFileID: fileID },
+              }).catch(() => {});
+            }).catch(() => {});
+          }
+
+          // 立即跳转，让详情页轮询展示流式菜品
+          clearInterval(this.loadingTimer);
+          this.setData({ loading: false });
+
+          const app = getApp() as AppOption;
+          app.globalData.pendingRecord = {
+            _id: recordId,
+            _openid: "",
+            imageFileID: "",
+            dishes: [],
+            partialDishes: [],
+            status: "processing",
+            createdAt: new Date(),
+          };
+          wx.navigateTo({
+            url: `/pages/menu-list/menu-list?recordId=${recordId}`,
+          });
+          consumeUsage().catch(() => {});
+          return;
+        }
+        lastError = lastError || "识别服务启动失败，请重试";
+      } else {
+        // 多图：上传后走批量流式模式
+        const fileIDs = await Promise.all(
+          compressedPaths.map((path) => uploadImage(path))
+        );
+        const batchRes = await recognizeMenuBatchStream(fileIDs);
+        recordId = batchRes.recordId ?? null;
+        if (batchRes.error) lastError = batchRes.error;
+        if (recordId) {
           const app = getApp() as AppOption;
           app.globalData.pendingRecord = {
             _id: recordId,
@@ -355,48 +479,15 @@ Page({
             url: `/pages/menu-list/menu-list?recordId=${recordId}`,
           });
           consumeUsage().catch(() => {});
-          return; // 提前返回，不进入后续逻辑
+          return;
         } else {
           lastError = lastError || "识别服务启动失败，请重试";
-        }
-      } else {
-        // 并行识别，Promise.all 按 fileIDs 顺序返回，保证菜品顺序与用户选择图片顺序一致
-        const results = await Promise.all(
-          fileIDs.map((fileID) => recognizeMenu(fileID, false))
-        );
-        results.forEach((r) => {
-          r.dishes.forEach((d) => allDishes.push(d));
-          if (r.error) lastError = r.error;
-        });
-        if (allDishes.length > 0) {
-          recordId = await saveRecord(fileIDs[0], allDishes);
-          if (recordId) {
-            const app = getApp() as AppOption;
-            app.globalData.pendingRecord = {
-              _id: recordId,
-              _openid: "",
-              imageFileID: fileIDs[0],
-              dishes: allDishes,
-              status: "done",
-              createdAt: new Date(),
-            };
-          }
-        } else {
-          lastError = lastError || "未识别到有效菜品";
         }
       }
 
       clearInterval(this.loadingTimer);
       this.setData({ loading: false });
-
-      if (recordId) {
-        wx.navigateTo({
-          url: `/pages/menu-list/menu-list?recordId=${recordId}`,
-        });
-        consumeUsage().catch(() => {}); // 后台消耗，不阻塞跳转
-      } else {
-        Toast.fail(lastError || "识别失败，请重试");
-      }
+      Toast.fail(lastError || "识别失败，请重试");
     } catch (e: any) {
       console.error("recognition failed:", e);
       clearInterval(this.loadingTimer);

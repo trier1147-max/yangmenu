@@ -1,6 +1,33 @@
-﻿import { callFunction, uploadImage } from "./cloud";
+import { callFunction, uploadImage } from "./cloud";
 import type { Dish } from "../utils/types";
 
+export async function recognizeMenuBase64Stream(
+  imageBase64: string
+): Promise<{ recordId?: string; error?: string }> {
+  const res = await callFunction<{ recordId: string; stream?: boolean }>(
+    "recognizeMenu",
+    { imageBase64, stream: true }
+  );
+  if (!res.success || !res.data?.recordId) {
+    return { error: res.error ?? "start base64 stream failed" };
+  }
+  return { recordId: res.data.recordId };
+}
+
+export async function recognizeMenuBatchStream(
+  imageFileIDs: string[]
+): Promise<{ recordId?: string; error?: string }> {
+  const res = await callFunction<{ recordId: string; stream?: boolean }>(
+    "recognizeMenu",
+    { imageFileIDs, stream: true }
+  );
+  if (!res.success || !res.data?.recordId) {
+    return { error: res.error ?? "start batch stream failed" };
+  }
+  return { recordId: res.data.recordId };
+}
+
+/** 单图流式（imageFileID）：用于 base64 超限时，先上传再走流式 */
 export async function recognizeMenuStream(
   imageFileID: string
 ): Promise<{ recordId?: string; error?: string }> {
@@ -46,17 +73,6 @@ export async function recognizeManualDishes(
     dishes: res.data.dishes,
     recordId: res.data.recordId,
   };
-}
-
-export async function saveRecord(
-  imageFileID: string,
-  dishes: Dish[]
-): Promise<string | null> {
-  const res = await callFunction<{ recordId: string }>("saveRecord", {
-    imageFileID,
-    dishes,
-  });
-  return res.success && res.data?.recordId ? res.data.recordId : null;
 }
 
 export { uploadImage } from "./cloud";

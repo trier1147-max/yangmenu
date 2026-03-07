@@ -351,12 +351,10 @@ Page({
         return;
       }
 
-      wx.nextTick(() => {
-        this.applyRecord(record);
-        if (record.status === "processing") {
-          this.startPolling(recordId);
-        }
-      });
+      this.applyRecord(record);
+      if (record.status === "processing") {
+        this.startPolling(recordId);
+      }
     } catch {
       this.setData({ initialLoading: false, error: "加载失败，请重试" });
     }
@@ -602,7 +600,7 @@ Page({
 
   startPolling(recordId: string) {
     this.stopPolling();
-    const intervalMs = 1200;
+    const intervalMs = 600;
     const pollStartTime = Date.now();
 
     const tick = async () => {

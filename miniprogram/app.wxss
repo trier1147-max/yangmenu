@@ -1,4 +1,4 @@
-/* 洋菜单 - 全局样式（橙仅主按钮，其余黑白灰） */
+/* 洋菜单 - 全局样式（橙仅主按钮，暖色调奶白背景） */
 .global-bg {
   position: fixed;
   top: 0;
@@ -6,15 +6,15 @@
   width: 100vw;
   height: 100vh;
   z-index: -1;
-  opacity: 0.85;
+  opacity: 0.95;
   pointer-events: none;
-  background: linear-gradient(165deg, #f8f8f8 0%, #f2f2f2 40%, #e8e8e8 100%);
+  background: linear-gradient(165deg, #FFFBF7 0%, #FFF8F0 40%, #FDF6EF 100%);
 }
 
 page {
   --color-primary: #FF8C00;
   --color-primary-light: #FFF3E0;
-  --color-bg: #FAFAFA;
+  --color-bg: #FFFBF7;
   --color-surface: #FFFFFF;
   --color-tag-bg: #F3F3F3;
   --color-tag-text: #666666;

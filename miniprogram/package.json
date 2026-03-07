@@ -1,0 +1,9 @@
+{
+  "name": "yangmenu-miniprogram",
+  "version": "1.0.0",
+  "description": "洋菜单小程序",
+  "dependencies": {
+    "@babel/runtime": "^7.24.0",
+    "@vant/weapp": "^1.11.6"
+  }
+}

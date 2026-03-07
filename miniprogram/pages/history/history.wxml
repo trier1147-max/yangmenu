@@ -1,0 +1,46 @@
+<van-toast id="van-toast" />
+
+<view class="global-bg"></view>
+
+<view class="history">
+  <view wx:if="{{list.length > 0}}" class="history-group card">
+    <view
+      wx:for="{{list}}"
+      wx:key="_id"
+      class="history-row"
+      data-record-id="{{item._id}}"
+      bindtap="onRecordTap"
+      hover-class="hover-bg"
+    >
+      <view class="history-icon-wrap">
+        <text class="history-emoji">📑</text>
+      </view>
+      <view class="history-content">
+        <view class="history-title-row">
+          <text class="history-dishes">{{item.dishSummary}}</text>
+          <view class="ai-tag">
+            <van-icon name="scan" />
+            <text class="ai-tag-text">AI 推荐</text>
+          </view>
+        </view>
+        <text class="history-time">{{item.timeText}}</text>
+      </view>
+      <view class="history-actions">
+        <view
+          class="history-delete"
+          data-record-id="{{item._id}}"
+          catchtap="onDeleteRecord"
+        >
+          <van-icon name="delete-o" size="18" color="#EE0A24" />
+        </view>
+        <van-icon name="arrow" color="#C7C7CC" size="16" />
+      </view>
+      <view wx:if="{{index !== list.length - 1}}" class="divider"></view>
+    </view>
+  </view>
+
+  <view wx:else class="empty-state">
+    <text class="empty-emoji">📥</text>
+    <text class="empty-text">还没拍过菜单，去吃顿好的吧！</text>
+  </view>
+</view>

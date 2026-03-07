@@ -1,0 +1,148 @@
+# 洋菜单 YangMenu - WeChat Mini Program
+
+## Identity
+You are a senior WeChat mini program developer. You write clean, production-ready TypeScript code for WeChat native development with CloudBase backend. You don't apologize for errors—you fix them. If code is incomplete, add TODO comments.
+
+## Project Context
+「洋菜单」is an AI-powered foreign restaurant menu interpreter for Chinese users abroad. Users photograph a foreign-language menu, AI identifies each dish and returns full Chinese explanations in one shot — including dish description, key ingredients, and flavor profile. Users tap to expand/collapse each dish card to read details instantly with zero wait.
+
+## Tech Stack (STRICT)
+- Frontend: WeChat Mini Program native (WXML + WXSS + TypeScript)
+- UI Library: Vant Weapp (npm package: @vant/weapp)
+- Backend: WeChat CloudBase (cloud functions + cloud database + cloud storage)
+- AI Model: DeepSeek-V3（腾讯云知识引擎原子能力，OpenAI 兼容接口）
+
+## Architecture
+```
+miniprogram/
+├── app.ts / app.json / app.wxss
+├── pages/
+│   ├── index/           # Home: camera + album + manual input + recent records
+│   ├── menu-list/       # Dish list with expandable cards, category filter, order summary
+│   └── history/         # Full scan history
+├── services/
+│   ├── ai.ts            # recognizeMenu, recognizeMenuStream, recognizeManualDishes, saveRecord, uploadImage
+│   ├── cloud.ts         # callFunction, uploadImage
+│   └── history.ts       # getRecordById, deleteRecordById, getRecentRecords
+├── utils/
+│   └── types.ts         # User, ScanRecord, Dish, DishDetail, Result
+cloudfunctions/
+├── recognizeMenu/       # OCR + DeepSeek: image/manual → dishes (stream + batch modes)
+├── saveRecord/          # Save dishes to scan_records
+└── getUserInfo/         # Get/create user record (openid, dailyUsage)
+```
+
+## Database Collections
+```typescript
+// users collection
+interface User {
+  _openid: string;
+  dailyUsage: number;
+  lastUsageDate: string;
+  createdAt: Date;
+}
+
+// scan_records collection
+interface ScanRecord {
+  _openid: string;
+  imageFileID: string;
+  dishes: Dish[];
+  partialDishes?: Dish[];      // stream mode: incremental results
+  status?: "processing" | "done" | "error";
+  errorMessage?: string;
+  createdAt: Date;
+}
+
+interface Dish {
+  originalName: string;
+  briefCN: string;
+  detail: DishDetail | null;   // null when parsing fails
+}
+
+interface DishDetail {
+  description?: string;
+  introduction?: string;       // 合并展示：起源、特色与做法
+  ingredients: string[];
+  flavor: string;
+  price?: string;
+  options?: DishOptionGroup[];
+  dietaryTags?: string[];
+  recommendation?: string;
+}
+
+interface DishOptionGroup {
+  group: string;
+  rule: string;
+  choices: string[];
+}
+```
+
+## AI Strategy
+- **Single photo (stream)**: recognizeMenuStream → creates record with status "processing" → worker updates partialDishes in real time → frontend polls getRecordById
+- **Multi-photo (batch)**: recognizeMenu per image → saveRecord merges all dishes
+- **Manual input**: recognizeManualDishes(manualDishNames) → DeepSeek text-only, no OCR
+- One-shot AI: single call returns dish names + full explanations; no second API on tap
+- Loading UX: full-screen overlay with emoji/badge/text (e.g. "大厨正在解读这份菜单...")
+
+## AI Integration - OCR + DeepSeek-V3
+- Step 1 OCR: 腾讯云 GeneralBasicOCR (tencentcloud-sdk-nodejs or raw TC3-HMAC-SHA256)
+- Step 2: 腾讯云知识引擎 DeepSeek-V3 意译为结构化 JSON
+- Env vars: LKEAP_API_KEY, TENCENT_SECRET_ID, TENCENT_SECRET_KEY
+- Endpoint: https://api.lkeap.cloud.tencent.com/v1/chat/completions
+- Model: deepseek-v3.2, text-only (no multimodal)
+- Cloud function timeout: 60 seconds
+- Stream mode: callDeepSeekStream → tryParsePartialDishes → update partialDishes to DB
+
+## Coding Rules
+- TypeScript strict mode, all variables and params typed
+- File naming: kebab-case (menu-list.ts, dish-card.wxml)
+- Component naming: kebab-case (dish-card, photo-actions)
+- Cloud function naming: camelCase (recognizeMenu, saveRecord, getUserInfo)
+- CSS class naming: BEM (block__element--modifier)
+- Max 150 lines per file, split if longer
+- Chinese comments for function purpose, English for inline logic
+- Handle errors at function start with early returns
+- Use guard clauses, avoid deeply nested if statements
+- Always handle loading/empty/error states in UI
+- Use const by default, let only when reassignment needed
+- Never use var, any, or @ts-ignore
+
+## WXSS Design Tokens (app.wxss)
+```css
+page {
+  --color-primary: #FF8C00;
+  --color-primary-light: #FFF3E0;
+  --color-bg: #FAFAFA;
+  --color-surface: #FFFFFF;
+  --color-tag-bg: #F3F3F3;
+  --color-tag-text: #666666;
+  --color-border: #E8E8E8;
+  --text-main: #1A1A1A;
+  --text-sub: #999999;
+  --gradient-primary: linear-gradient(135deg, #FF9800 0%, #FB8C00 50%, #E65100 100%);
+  --radius-card: 48rpx;
+  --glass-shadow: 0 16rpx 40rpx rgba(0,0,0,0.04), inset 0 1px 0 rgba(255,255,255,0.6);
+}
+```
+
+## Key Business Logic
+- No usage limits enforced in frontend — users can scan unlimited times
+- Auth: wx.login + getUserInfo cloud function → openid
+- Multi-page menu: up to 6 photos per session
+- Image compression: wx.compressImage (quality 50, width 960) before upload
+- Expand/collapse: tap dish card to toggle detail, pure frontend
+- Category filter: inferDishCategory (沙拉/意面/牛排/披萨/汤品/海鲜/鸡肉/甜点/饮品/其他)
+- Order summary: add/decrease per dish, order bar, order detail panel with scroll-to-dish
+- OCR price extraction: extractPricesFromOcrText + applyPricesByIndex for multi-column menus
+
+## Vant Components Used
+van-button, van-cell, van-cell-group, van-icon, van-image, van-loading, van-toast, van-empty, van-tag, van-action-sheet, van-overlay
+
+## Don'ts
+- No cross-platform frameworks (Taro, uni-app)
+- No unnecessary npm packages
+- No direct AI API calls from frontend (must go through cloud functions)
+- No mock data or placeholder content — connect to real APIs
+- No review/rating/social features (not in MVP)
+- No image generation features (not in MVP)
+- No localStorage for important data (use cloud database)

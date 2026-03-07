@@ -1,0 +1,39 @@
+# 依赖
+node_modules/
+miniprogram_npm/
+
+# 微信开发者工具
+project.private.config.json
+*.log
+
+# 云函数本地依赖（云端会重新安装）
+cloudfunctions/**/node_modules/
+
+# 敏感信息（切勿提交密钥）
+*.env
+.env
+.env.local
+.env.*.local
+
+# 系统文件
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# IDE
+.idea/
+.vscode/
+*.code-workspace
+
+# 构建产物
+dist/
+build/
+*.min.js
+*.min.css
+
+# 临时文件
+tmp/
+temp/
+.cache/

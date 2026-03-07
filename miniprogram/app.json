@@ -1,0 +1,26 @@
+{
+  "lazyCodeLoading": "requiredComponents",
+  "pages": [
+    "pages/index/index",
+    "pages/menu-list/menu-list",
+    "pages/history/history"
+  ],
+  "subPackages": [],
+  "window": {
+    "navigationBarTitleText": "洋菜单",
+    "navigationBarBackgroundColor": "#FAFAFA",
+    "navigationBarTextStyle": "black",
+    "backgroundColor": "#F5F6FA"
+  },
+  "usingComponents": {
+    "van-toast": "@vant/weapp/toast/index",
+    "van-icon": "@vant/weapp/icon/index"
+  },
+  "permission": {
+    "scope.userLocation": {
+      "desc": "用于识别您所在城市，提供更精准的菜品文化背景介绍"
+    }
+  },
+  "style": "v2",
+  "sitemapLocation": "sitemap.json"
+}

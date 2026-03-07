@@ -1,0 +1,6 @@
+{
+  "navigationBarTitleText": "洋菜单",
+  "usingComponents": {
+    "van-popup": "@vant/weapp/popup/index"
+  }
+}

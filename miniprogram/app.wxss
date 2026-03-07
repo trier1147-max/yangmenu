@@ -1,0 +1,76 @@
+/* 洋菜单 - 全局样式（橙仅主按钮，其余黑白灰） */
+.global-bg {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: -1;
+  opacity: 0.85;
+  pointer-events: none;
+  background: linear-gradient(165deg, #f8f8f8 0%, #f2f2f2 40%, #e8e8e8 100%);
+}
+
+page {
+  --color-primary: #FF8C00;
+  --color-primary-light: #FFF3E0;
+  --color-bg: #FAFAFA;
+  --color-surface: #FFFFFF;
+  --color-tag-bg: #F3F3F3;
+  --color-tag-text: #666666;
+  --color-border: #E8E8E8;
+  --text-main: #1A1A1A;
+  --text-sub: #999999;
+  --text-link: #666666;
+
+  /* 拍照按钮：渐变橙色（亮橙→深橙） */
+  --gradient-primary: linear-gradient(135deg, #FF9800 0%, #FB8C00 50%, #E65100 100%);
+
+  --glass-noise: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.08'/%3E%3C/svg%3E");
+  --glass-blur: blur(40px) saturate(180%);
+  --glass-border: rgba(255, 255, 255, 0.5);
+  --glass-shadow: 0 16rpx 40rpx rgba(0, 0, 0, 0.04), inset 0 1px 0 rgba(255, 255, 255, 0.6), inset 0 -1px 0 rgba(255, 255, 255, 0.1);
+
+  background-color: var(--color-bg);
+  font-family: "SF Pro Display", "Inter", "PingFang SC", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+  color: var(--text-main);
+}
+
+/* Apple-style hover effects */
+.hover-scale {
+  transform: scale(0.96) !important;
+  transition: transform 0.2s cubic-bezier(0.25, 0.8, 0.25, 1) !important;
+}
+
+.hover-opacity {
+  opacity: 0.7 !important;
+  transition: opacity 0.2s ease !important;
+}
+
+.hover-bg {
+  background-color: rgba(0, 0, 0, 0.03) !important;
+  transition: background-color 0.2s ease !important;
+}
+
+.card {
+  background: var(--color-surface);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1rpx solid var(--color-border);
+  border-radius: 48rpx;
+  box-shadow: var(--glass-shadow);
+  margin-bottom: 32rpx;
+  overflow: hidden;
+}
+
+button {
+  background: initial;
+}
+
+button:focus {
+  outline: 0;
+}
+
+button::after {
+  border: none;
+}

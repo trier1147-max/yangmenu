@@ -1,0 +1,204 @@
+<van-toast id="van-toast" />
+
+<view class="global-bg"></view>
+
+<view class="menu-list">
+  <van-loading
+    wx:if="{{initialLoading}}"
+    type="spinner"
+    class="menu-list__loading"
+    color="#FF9500"
+  />
+
+  <view wx:elif="{{error}}" class="menu-list__error">
+    <text class="menu-list__error-text">{{error}}</text>
+  </view>
+
+  <view wx:else class="menu-list__container">
+    <!-- 点单汇总栏：固定在视口底部，无需下滑即可看到 -->
+    <view
+      wx:if="{{showOrderBar}}"
+      class="order-summary-bar order-summary-bar--fixed"
+    >
+      <view class="order-summary-bar__main" bindtap="onOrderSummaryTap">
+        <text class="order-summary-bar__title">点单汇总</text>
+        <text class="order-summary-bar__meta">菜品 {{orderDishCount}} 道 · 份数 {{orderItemCount}} · {{orderAmountText}}</text>
+        <text class="order-summary-bar__hint">点击可查看已点菜品</text>
+      </view>
+      <view class="order-summary-bar__actions" catchtap="">
+        <view class="order-summary-bar__btn-retake" catchtap="onRetakePhoto">再拍一张</view>
+      </view>
+    </view>
+
+    <scroll-view
+      class="menu-list__scroll"
+      scroll-y="true"
+      scroll-into-view="{{scrollIntoId}}"
+      scroll-with-animation="true"
+      enhanced="true"
+    >
+      <view wx:if="{{processing || timeoutHint}}" class="menu-list__status card">
+        <view wx:if="{{processing}}" class="menu-list__status-row">
+          <text class="menu-list__status-emoji">👨‍🍳</text>
+          <text class="menu-list__status-text">正在识别中，已解析 {{allDishes.length}} 道菜</text>
+        </view>
+        <text wx:if="{{timeoutHint}}" class="menu-list__timeout-text">{{timeoutHint}}</text>
+      </view>
+
+      <view class="header-card card" wx:if="{{imageFileID}}">
+        <image class="menu-list__thumb" src="{{imageFileID}}" mode="aspectFill" binderror="onImageError" />
+        <view class="thumb-blur-bar">
+          <text class="thumb-text">已识别 {{allDishes.length}} 道菜</text>
+        </view>
+      </view>
+
+      <scroll-view
+        wx:if="{{categories && categories.length}}"
+        class="category-scroll"
+        scroll-x="true"
+        show-scrollbar="false"
+        enhanced="true"
+      >
+        <view class="category-row">
+          <view
+            wx:for="{{categories}}"
+            wx:key="key"
+            class="category-chip {{activeCategory === item.key ? 'category-chip--active' : ''}}"
+            data-key="{{item.key}}"
+            bindtap="onCategoryTap"
+          >
+            {{item.label}}（{{item.count}}）
+          </view>
+        </view>
+      </scroll-view>
+
+      <view class="dish-bubbles">
+        <view
+          wx:for="{{dishes}}"
+          wx:key="key"
+          id="dish-{{index}}"
+          class="dish-card card {{item.expanded ? 'dish-card--expanded' : ''}}"
+          hover-class="dish-card--hover"
+          hover-start-time="30"
+          hover-stay-time="120"
+          data-index="{{index}}"
+          bindtap="onDishTap"
+        >
+          <view class="dish-header" hover-class="hover-bg">
+            <view class="dish-info">
+              <view class="dish-name-row">
+                <text class="dish-name">{{item.originalName}}</text>
+                <text wx:if="{{item.detail && item.detail.price}}" class="dish-price">{{item.detail.price}}</text>
+              </view>
+              <view class="dish-brief-row">
+                <text class="dish-brief">{{item.briefCN}}</text>
+                <view class="dish-category-tag">{{item.category || '其他'}}</view>
+              </view>
+            </view>
+          </view>
+
+          <view class="dish-footer">
+            <view class="dish-hint" hover-class="hover-bg">
+              <van-icon
+                name="arrow-down"
+                size="14"
+                color="#8E8E93"
+                class="dish-arrow {{item.expanded ? 'dish-arrow--expanded' : ''}}"
+              />
+              <text class="dish-hint-text">点击卡片查看菜品介绍</text>
+            </view>
+            <view class="dish-order-row" catchtap="onStepperAreaTap">
+              <view class="order-stepper">
+                <view class="order-btn order-btn--minus" data-key="{{item.key}}" bindtap="onDecreaseOrder">-</view>
+                <text class="order-count">{{item.orderCount || 0}}</text>
+                <view class="order-btn order-btn--plus" data-key="{{item.key}}" bindtap="onAddOrder">+</view>
+              </view>
+            </view>
+          </view>
+
+          <view class="dish-detail" wx:if="{{item.expanded}}">
+            <block
+              wx:if="{{item.detail && (item.detail.introduction || item.detail.flavor || (item.detail.ingredients && item.detail.ingredients.length) || item.detail.recommendation)}}"
+            >
+              <view class="detail-block" wx:if="{{item.detail.introduction}}">
+                <view class="detail-title">
+                  <text>🍽️ 菜品介绍</text>
+                </view>
+                <text class="detail-text detail-text--select">{{item.detail.introduction}}</text>
+              </view>
+
+              <view class="detail-block" wx:if="{{item.detail.flavor}}">
+                <view class="detail-title">
+                  <text>👅 风味口感</text>
+                </view>
+                <text class="detail-text detail-text--select">{{item.detail.flavor}}</text>
+              </view>
+
+              <view class="detail-block" wx:if="{{item.detail.ingredients && item.detail.ingredients.length}}">
+                <view class="detail-title">
+                  <text>🥘 核心食材</text>
+                </view>
+                <view class="ingredients-list">
+                  <view
+                    wx:for="{{item.detail.ingredients}}"
+                    wx:for-item="ing"
+                    wx:key="*this"
+                    class="ingredient-pill"
+                  >{{ing}}</view>
+                </view>
+              </view>
+
+              <view class="detail-block" wx:if="{{item.detail.recommendation}}">
+                <view class="detail-title">
+                  <text>💡 推荐</text>
+                </view>
+                <text class="detail-text detail-text--select">{{item.detail.recommendation}}</text>
+              </view>
+            </block>
+            <view wx:else class="detail-empty">暂无更多信息</view>
+          </view>
+        </view>
+      </view>
+
+      <view class="menu-list__bottom-pad" wx:if="{{showOrderBar || (allDishes.length > 0 && !processing && !error && !showOrderBar)}}"></view>
+    </scroll-view>
+  </view>
+
+  <!-- 无订单时单独显示的底部按钮 -->
+  <view wx:if="{{!processing && !error && allDishes.length > 0 && !showOrderBar}}" class="bottom-action-bar">
+    <view class="btn-primary" bindtap="onRetakePhoto" hover-class="hover-scale">
+      再拍一张
+    </view>
+  </view>
+
+  <!-- 点击点单汇总后展开的清单（无详情卡片），点击菜名定位到上方菜品 -->
+  <view wx:if="{{orderDetailVisible}}" class="order-detail-mask" bindtap="onCloseOrderDetail">
+    <view class="order-detail-panel" catchtap="">
+      <view class="order-detail-panel__head">
+        <text class="order-detail-panel__title">将要点的菜</text>
+        <text class="order-detail-panel__close" bindtap="onCloseOrderDetail">关闭</text>
+      </view>
+      <scroll-view class="order-detail-panel__list" scroll-y="true" enhanced="true">
+        <view
+          wx:for="{{orderListItems}}"
+          wx:key="key"
+          class="order-detail-item"
+          data-key="{{item.key}}"
+          data-scroll-index="{{item.scrollIndex}}"
+          bindtap="onOrderItemTap"
+        >
+          <text class="order-detail-item__name">{{item.name}}</text>
+          <view class="order-detail-item__right">
+            <text class="order-detail-item__price">{{item.price}}</text>
+            <view class="order-detail-item__stepper" catchtap="onStepperAreaTap">
+              <view class="order-detail-item__btn order-detail-item__btn--minus" data-key="{{item.key}}" bindtap="onDecreaseOrder">-</view>
+              <text class="order-detail-item__count-num">{{item.count}}</text>
+              <view class="order-detail-item__btn order-detail-item__btn--plus" data-key="{{item.key}}" bindtap="onAddOrder">+</view>
+            </view>
+          </view>
+        </view>
+      </scroll-view>
+    </view>
+  </view>
+</view>
+

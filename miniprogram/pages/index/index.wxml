@@ -1,0 +1,174 @@
+<van-toast id="van-toast" />
+
+<!-- 手动输入弹窗：更宽的输入框 -->
+<van-popup
+  show="{{ showManualInput }}"
+  round
+  position="center"
+  custom-class="manual-input-popup"
+  custom-style="width: 90%; max-width: 640rpx;"
+  bind:close="onManualInputClose"
+>
+  <view class="manual-input__wrap">
+    <view class="manual-input__title">手动输入</view>
+    <textarea
+      class="manual-input__textarea"
+      placeholder="请输入菜名，支持换行或中英文逗号分隔"
+      placeholder-class="manual-input__placeholder"
+      value="{{ manualInputText }}"
+      bindinput="onManualInputChange"
+      auto-height
+      maxlength="500"
+      show-confirm-bar="{{ false }}"
+    />
+    <view class="manual-input__footer">
+      <view class="manual-input__btn manual-input__btn--cancel" bindtap="onManualInputCancel">取消</view>
+      <view class="manual-input__btn manual-input__btn--confirm" bindtap="onManualInputConfirm">确认</view>
+    </view>
+  </view>
+</van-popup>
+
+<view class="global-bg"></view>
+
+<view class="index">
+  <!-- 背景装饰层：极淡 emoji 散落暗纹 -->
+  <view class="bg-pattern">
+    <text class="bg-icon bg-icon--1">🍕</text>
+    <text class="bg-icon bg-icon--2">🥐</text>
+    <text class="bg-icon bg-icon--3">🍜</text>
+    <text class="bg-icon bg-icon--4">🍷</text>
+    <text class="bg-icon bg-icon--5">🥗</text>
+    <text class="bg-icon bg-icon--6">🍣</text>
+    <text class="bg-icon bg-icon--7">🧀</text>
+    <text class="bg-icon bg-icon--8">🍝</text>
+    <text class="bg-icon bg-icon--9">🌮</text>
+    <text class="bg-icon bg-icon--10">🥘</text>
+    <text class="bg-icon bg-icon--11">🍰</text>
+    <text class="bg-icon bg-icon--12">🥖</text>
+    <text class="bg-icon bg-icon--13">🍳</text>
+    <text class="bg-icon bg-icon--14">🧁</text>
+    <text class="bg-icon bg-icon--15">🥩</text>
+    <text class="bg-icon bg-icon--16">🍔</text>
+    <text class="bg-icon bg-icon--17">🥑</text>
+    <text class="bg-icon bg-icon--18">🍤</text>
+    <text class="bg-icon bg-icon--19">🫕</text>
+    <text class="bg-icon bg-icon--20">🍦</text>
+    <text class="bg-icon bg-icon--21">🥂</text>
+    <text class="bg-icon bg-icon--22">🍩</text>
+    <text class="bg-icon bg-icon--23">🫒</text>
+    <text class="bg-icon bg-icon--24">🍱</text>
+  </view>
+
+  <!-- 顶部暖色渐变装饰 -->
+  <view class="index__warm-bg"></view>
+
+  <view class="index__header">
+    <view class="brand">
+      <view class="brand__row">
+        <image class="brand__logo" src="/images/logo.webp" mode="aspectFit" />
+        <text class="brand__zh">洋菜单</text>
+        <text class="brand__en">YangMenu</text>
+      </view>
+      <text class="brand__slogan">你的 AI 点餐翻译官</text>
+    </view>
+  </view>
+
+  <view class="ai-scanner-wrap">
+    <view class="ai-orb-ring">
+      <view class="ai-orb" bindtap="onTakePhoto" hover-class="hover-scale">
+        <view class="ai-orb-inner">
+          <van-icon name="photograph" size="72" color="#FFFFFF" />
+        </view>
+      </view>
+    </view>
+    <text class="ai-title">拍照识菜</text>
+    <text class="ai-desc">不止翻译，帮你搞懂每道菜</text>
+  </view>
+
+  <view class="index__highlights">
+    <text class="index__highlight-tag">🧠 AI 深度解读</text>
+    <text class="index__highlight-tag">🌍 支持所有语言</text>
+    <text class="index__highlight-tag">⚡ 10秒出结果</text>
+  </view>
+
+  <view class="secondary-actions">
+    <view class="btn-pill card" bindtap="onChooseAlbum" hover-class="hover-scale">
+      <van-icon name="photo" size="20" class="btn-icon" />
+      <text class="btn-text">相册选图</text>
+    </view>
+    <view class="btn-pill card" bindtap="onManualInput" hover-class="hover-scale">
+      <van-icon name="edit" size="20" class="btn-icon" />
+      <text class="btn-text">手动输入</text>
+    </view>
+  </view>
+
+  <view class="hint-bubble">
+    <van-icon name="info-o" size="16" class="hint-icon" />
+    <text class="hint-text">建议长菜单分页拍摄，识别会更稳</text>
+  </view>
+
+  <view class="history-module">
+    <view class="module-header">
+      <text class="module-title">最近识别</text>
+      <text class="module-more" bindtap="onViewAllHistory">全部</text>
+    </view>
+
+    <view wx:if="{{recentRecords.length > 0}}" class="history-group card">
+      <block wx:for="{{recentRecords}}" wx:key="_id">
+        <view
+          wx:if="{{item.dishCount > 0}}"
+          class="history-row"
+          data-record-id="{{item._id}}"
+          bindtap="onRecordTap"
+          hover-class="hover-bg"
+        >
+          <view class="history-thumb-wrap">
+            <image
+              wx:if="{{item.imageFileID}}"
+              class="history-thumb"
+              src="{{item.imageFileID}}"
+              mode="aspectFill"
+            />
+            <view wx:else class="history-thumb-placeholder">🍽️</view>
+          </view>
+          <view class="history-content">
+            <view class="history-title-row">
+              <text class="history-dishes">{{item.dishSummary}}</text>
+              <view class="ai-tag">
+                <text class="ai-tag-text">{{item.dishCount}}道菜</text>
+              </view>
+            </view>
+            <text class="history-time">{{item.timeText}}</text>
+          </view>
+          <view class="history-actions">
+            <view
+              class="history-delete"
+              data-record-id="{{item._id}}"
+              catchtap="onDeleteRecentRecord"
+            >
+              <van-icon name="delete-o" size="18" color="#999999" />
+            </view>
+            <van-icon name="arrow" color="#CCCCCC" size="16" />
+          </view>
+        </view>
+      </block>
+    </view>
+    <view wx:else class="empty-state card">
+      <text class="empty-emoji">🍽️</text>
+      <text class="empty-text">还没有识别记录，去拍一张菜单试试</text>
+    </view>
+  </view>
+</view>
+
+<view wx:if="{{loading}}" class="index__overlay">
+  <view class="index__loading-box">
+    <view class="loading-badge">{{loadingBadge || '菜单小剧场'}}</view>
+    <view class="loading-mascot">
+      <text class="loading-emoji">{{loadingEmoji || '👨‍🍳'}}</text>
+      <text class="loading-pot">🍲</text>
+      <text class="loading-spark loading-spark--a">✨</text>
+      <text class="loading-spark loading-spark--b">✨</text>
+    </view>
+    <text class="index__loading-text">{{loadingText || '大厨正在解读这份菜单...'}}</text>
+  </view>
+</view>

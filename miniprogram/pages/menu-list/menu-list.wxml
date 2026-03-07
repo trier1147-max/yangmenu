@@ -52,25 +52,54 @@
         </view>
       </view>
 
-      <scroll-view
-        wx:if="{{categories && categories.length}}"
-        class="category-scroll"
-        scroll-x="true"
-        show-scrollbar="false"
-        enhanced="true"
-      >
-        <view class="category-row">
+      <view wx:if="{{categories && categories.length}}" class="category-section">
+        <view wx:if="{{!categoryExpanded}}" class="category-collapsed-row">
+          <view class="category-chips-wrap">
+            <view class="category-row category-row--collapsed">
+              <view
+                wx:for="{{collapsedCategories}}"
+                wx:key="key"
+                class="category-chip category-chip--sm {{activeCategory === item.key ? 'category-chip--active' : ''}}"
+                data-key="{{item.key}}"
+                bindtap="onCategoryTap"
+              >
+                {{item.label}}（{{item.count}}）
+              </view>
+            </view>
+          </view>
           <view
-            wx:for="{{categories}}"
-            wx:key="key"
-            class="category-chip {{activeCategory === item.key ? 'category-chip--active' : ''}}"
-            data-key="{{item.key}}"
-            bindtap="onCategoryTap"
+            wx:if="{{categories.length > 4}}"
+            class="category-chip category-chip--sm category-chip--expand category-expand-fixed"
+            hover-class="category-chip--expand-hover"
+            bindtap="onCategoryExpandTap"
           >
-            {{item.label}}（{{item.count}}）
+            <text>展开</text>
+            <van-icon name="arrow-down" size="10" color="currentColor" />
           </view>
         </view>
-      </scroll-view>
+        <view wx:else class="category-expanded">
+          <view class="category-row category-row--wrap">
+            <view
+              wx:for="{{categories}}"
+              wx:key="key"
+              class="category-chip {{activeCategory === item.key ? 'category-chip--active' : ''}}"
+              data-key="{{item.key}}"
+              bindtap="onCategoryTap"
+            >
+              {{item.label}}（{{item.count}}）
+            </view>
+            <view
+              wx:if="{{categories.length > 4}}"
+              class="category-chip category-chip--sm category-chip--expand"
+              hover-class="category-chip--expand-hover"
+              bindtap="onCategoryExpandTap"
+            >
+              <text>收起</text>
+              <van-icon name="arrow-up" size="10" color="currentColor" />
+            </view>
+          </view>
+        </view>
+      </view>
 
       <view class="dish-bubbles">
         <view

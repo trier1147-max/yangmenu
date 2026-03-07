@@ -224,6 +224,7 @@ function normalizeOptionGroups(raw: unknown) {
 }
 
 function inferDishCategory(dish: Pick<Dish, "originalName" | "briefCN" | "detail">) {
+  // 优先用 originalName（菜单原文/英文）匹配，避免中文歧义（如 鸡尾酒→鸡肉）
   const text = [
     String(dish.originalName || ""),
     String(dish.briefCN || ""),
@@ -234,16 +235,33 @@ function inferDishCategory(dish: Pick<Dish, "originalName" | "briefCN" | "detail
     .join(" ")
     .toLowerCase();
 
+  // 顺序重要：更具体的品类放前面。匹配以英文原文为主，展示仍为中文。
   const rules: Array<{ label: string; patterns: RegExp[] }> = [
-    { label: "沙拉", patterns: [/沙拉|salad/] },
-    { label: "意面", patterns: [/意面|意粉|pasta|spaghetti|linguine|fettuccine|penne|lasagna/] },
-    { label: "牛排", patterns: [/牛排|菲力|西冷|肋眼|t-?bone|steak|sirloin|ribeye|tenderloin/] },
-    { label: "披萨", patterns: [/披萨|pizza/] },
-    { label: "汤品", patterns: [/汤|浓汤|汤品|soup|bisque|chowder/] },
-    { label: "海鲜", patterns: [/海鲜|虾|蟹|贝|三文鱼|鳕鱼|青口|octopus|shrimp|prawn|salmon|cod|seafood|mussel/] },
-    { label: "鸡肉", patterns: [/鸡|chicken/] },
-    { label: "甜点", patterns: [/甜点|蛋糕|布丁|提拉米苏|冰淇淋|dessert|cake|pudding|ice cream|tiramisu/] },
-    { label: "饮品", patterns: [/饮品|咖啡|茶|果汁|苏打|wine|beer|cocktail|coffee|tea|juice|drink/] },
+    { label: "沙拉", patterns: [/salad|沙拉/] },
+    { label: "汤品", patterns: [/soup|bisque|chowder|gazpacho|汤|浓汤|汤品|冷汤/] },
+    { label: "意面", patterns: [/pasta|spaghetti|linguine|fettuccine|penne|lasagna|ravioli|gnocchi|意面|意粉|通心粉|意式饺子/] },
+    { label: "烩饭", patterns: [/risotto|paella|烩饭|海鲜饭/] },
+    { label: "炖菜", patterns: [/stew|ragu|confit|ratatouille|炖|烩菜|勃艮第|油封|普罗旺斯炖菜/] },
+    { label: "烤物", patterns: [/grill|grilled|roast|roasted|烤鸡|烤鱼|烤肉|烤羊|烤鸭|烤蔬菜|烧烤/] },
+    { label: "牛排", patterns: [/steak|sirloin|ribeye|tenderloin|t-?bone|牛排|菲力|西冷|肋眼/] },
+    { label: "披萨", patterns: [/pizza|披萨/] },
+    { label: "汉堡", patterns: [/burger|hamburger|汉堡|汉堡包|芝士堡|牛肉堡|鸡堡|鱼堡|虾堡/] },
+    { label: "三明治", patterns: [/sandwich|sub|panini|三明治|三文治|潜艇堡|帕尼尼/] },
+    { label: "炸物", patterns: [/fries|fried chicken|chicken wings|wings|nuggets|schnitzel|炸鸡|炸薯条|鸡翅|鸡米花|薯条|薯格|炸肉排/] },
+    { label: "寿司", patterns: [/sushi|sashimi|nigiri|maki|寿司|刺身|手卷|卷物/] },
+    { label: "煎饼", patterns: [/crepe|pancake|waffle|煎饼|可丽饼|华夫/] },
+    { label: "面包", patterns: [/bread|croissant|pretzel|toast|baguette|面包|可颂|碱水结|吐司|法棍/] },
+    { label: "冷盘", patterns: [/charcuterie|prosciutto|jamón|gravlax|冷盘|冷切|腌肉|帕尔马火腿|伊比利亚|腌鱼|烟熏三文鱼/] },
+    { label: "派", patterns: [/pie|quiche|派|法式咸派|酥皮/] },
+    { label: "海鲜", patterns: [/seafood|shrimp|prawn|salmon|cod|octopus|mussel|海鲜|虾|蟹|贝|三文鱼|鳕鱼|青口|章鱼/] },
+    { label: "饮品", patterns: [/cocktail|mojito|margarita|martini|negroni|aperol|spritz|wine|beer|coffee|tea|juice|latte|espresso|smoothie|sangria|gin|vodka|rum|whisky|whiskey|liqueur|鸡尾酒|饮品|咖啡|茶|果汁|苏打|汽水|拿铁|美式|奶昔/] },
+    { label: "鸡肉", patterns: [/chicken\b|chicken\s|鸡肉|鸡腿|鸡胸|鸡块|鸡(?!尾)/] },
+    { label: "猪肉", patterns: [/pork|wurst|bratwurst|猪排|猪肘|猪肉|香肠/] },
+    { label: "羊肉", patterns: [/lamb|mutton|羊排|羊肉|羊腿/] },
+    { label: "咖喱", patterns: [/curry|咖喱/] },
+    { label: "塔可卷饼", patterns: [/taco|burrito|wrap|fajita|塔可|卷饼/] },
+    { label: "小食", patterns: [/appetizer|starter|tapas|bruschetta|小食|开胃菜|小菜|前菜|小食拼盘|意式烤面包/] },
+    { label: "甜点", patterns: [/dessert|cake|pudding|ice cream|tiramisu|macaron|churros|soufflé|甜点|蛋糕|布丁|提拉米苏|冰淇淋|马卡龙|蛋挞|舒芙蕾/] },
   ];
 
   for (const rule of rules) {
@@ -260,7 +278,9 @@ Page({
     allDishes: [] as MenuListDish[],
     dishes: [] as MenuListDish[],
     categories: [] as MenuCategory[],
+    collapsedCategories: [] as MenuCategory[],
     activeCategory: "all",
+    categoryExpanded: false,
     orderDishCount: 0,
     orderItemCount: 0,
     orderAmountText: "",
@@ -388,6 +408,7 @@ Page({
     const activeCategory = categories.some((c: MenuCategory) => c.key === this.data.activeCategory)
       ? this.data.activeCategory
       : "all";
+    const collapsedCategories = categories.slice(0, 4);
     const filteredDishes = this.filterDishesByCategory(dishes, activeCategory);
     const summary = this.computeOrderSummaryPayload(dishes);
 
@@ -396,6 +417,7 @@ Page({
       allDishes: dishes,
       dishes: filteredDishes,
       categories,
+      collapsedCategories,
       activeCategory,
       initialLoading: false,
       processing,
@@ -635,6 +657,10 @@ Page({
     if (key === this.data.activeCategory) return;
     this.setData({ activeCategory: key });
     this.refreshVisibleDishes();
+  },
+
+  onCategoryExpandTap() {
+    this.setData({ categoryExpanded: !this.data.categoryExpanded });
   },
 
   onAddOrder(e: WechatMiniprogram.TouchEvent) {

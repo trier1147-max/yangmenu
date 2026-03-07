@@ -7,9 +7,9 @@ import {
   saveRecord,
   uploadImage,
 } from "../../services/ai";
-import { deleteRecordById, getRecentRecords, getRecordById } from "../../services/history";
+import { deleteRecordById, getRecentRecords } from "../../services/history";
 import { checkUsage, consumeUsage, addShareBonus } from "../../services/user";
-import type { Dish, ScanRecord } from "../../utils/types";
+import type { Dish } from "../../utils/types";
 import type { RecentRecordItem } from "../../services/history";
 
 const MAX_IMAGE_SIZE_BYTES = 4 * 1024 * 1024; // 4MB
@@ -90,30 +90,6 @@ Page({
       total: usage.total,
       canShare: usage.canShare,
     });
-  },
-
-  /** 轮询直到解析出至少一道菜，或识别完成/报错/超时。成功时返回 record 供跳转页直接使用，避免二次请求。 */
-  async waitForAtLeastOneDish(
-    recordId: string,
-    timeoutMs = 35000
-  ): Promise<{ hasDish: boolean; errorMessage?: string; record?: ScanRecord & { _id: string } }> {
-    const start = Date.now();
-    while (Date.now() - start < timeoutMs) {
-      const record = await getRecordById(recordId);
-      if (record) {
-        const count = (record.partialDishes?.length ?? 0) || (record.dishes?.length ?? 0);
-        if (count > 0) {
-          const full = record as ScanRecord & { _id: string };
-          return { hasDish: true, record: Object.assign({}, full, { _id: recordId }) };
-        }
-        if (record.status === "done" || record.status === "error") {
-          const err = (record as { errorMessage?: string }).errorMessage;
-          return { hasDish: false, errorMessage: err };
-        }
-      }
-      await new Promise((r) => setTimeout(r, 1200));
-    }
-    return { hasDish: false };
   },
 
   async onTakePhoto() {
@@ -263,8 +239,6 @@ Page({
         return;
       }
 
-      await consumeUsage();
-
       const app = getApp() as AppOption;
       app.globalData.pendingRecord = {
         _id: result.recordId,
@@ -277,6 +251,7 @@ Page({
       wx.navigateTo({
         url: `/pages/menu-list/menu-list?recordId=${result.recordId}`,
       });
+      consumeUsage().catch(() => {}); // 后台消耗，不阻塞跳转
     } catch (e: any) {
       this.setData({ loading: false });
       const errMsg = e?.errMsg || e?.message || (typeof e === "string" ? e : "");
@@ -362,17 +337,30 @@ Page({
         recordId = streamRes.recordId ?? null;
         if (streamRes.error) lastError = streamRes.error;
         if (recordId) {
-          const { hasDish, errorMessage, record } = await this.waitForAtLeastOneDish(recordId);
-          if (!hasDish) {
-            recordId = null;
-            lastError = errorMessage || lastError || "未识别到有效菜品";
-          } else if (record) {
-            (getApp() as AppOption).globalData.pendingRecord = record;
-          }
+          // 妙招：拿到 recordId 后立即跳转详情页，不再在加载页等待首道菜
+          // 详情页会轮询展示流式菜品，用户能更快看到结果页
+          const app = getApp() as AppOption;
+          app.globalData.pendingRecord = {
+            _id: recordId,
+            _openid: "",
+            imageFileID: fileIDs[0],
+            dishes: [],
+            partialDishes: [],
+            status: "processing",
+            createdAt: new Date(),
+          };
+          clearInterval(this.loadingTimer);
+          this.setData({ loading: false });
+          wx.navigateTo({
+            url: `/pages/menu-list/menu-list?recordId=${recordId}`,
+          });
+          consumeUsage().catch(() => {});
+          return; // 提前返回，不进入后续逻辑
         } else {
           lastError = lastError || "识别服务启动失败，请重试";
         }
       } else {
+        // 并行识别，Promise.all 按 fileIDs 顺序返回，保证菜品顺序与用户选择图片顺序一致
         const results = await Promise.all(
           fileIDs.map((fileID) => recognizeMenu(fileID, false))
         );
@@ -402,10 +390,10 @@ Page({
       this.setData({ loading: false });
 
       if (recordId) {
-        await consumeUsage();
         wx.navigateTo({
           url: `/pages/menu-list/menu-list?recordId=${recordId}`,
         });
+        consumeUsage().catch(() => {}); // 后台消耗，不阻塞跳转
       } else {
         Toast.fail(lastError || "识别失败，请重试");
       }

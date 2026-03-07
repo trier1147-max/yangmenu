@@ -1,0 +1,56 @@
+---
+description: 页面跳转与首屏性能规范，防止代码改动导致性能回退
+globs: miniprogram/pages/**/*.{ts,wxml,wxss}
+alwaysApply: false
+---
+
+# 性能敏感区域规范
+
+## 核心原则
+
+**禁止任何改动降低「加载页 → 详情页」的跳转与首屏渲染速度。** 该路径是用户主流程，性能回退会直接影响体验。
+
+## 性能敏感路径
+
+```
+index（加载页）→ wx.navigateTo → menu-list（详情页）
+```
+
+- **index**: 识别完成后 `setData({ loading: false })` → `wx.navigateTo`
+- **menu-list**: `onLoad` 中读取 `pendingRecord` 或 `getRecordById` → `applyRecord` → `setData`
+
+## 禁止或需谨慎的改动
+
+### 1. setData 与首屏数据量
+
+- **禁止** 在 menu-list 的 `applyRecord` 或首次 `setData` 中增加大体积字段（如完整菜品详情、长文本、嵌套过深的对象）
+- **禁止** 一次性 setData 超过必要字段；合并多次 setData 时注意总 payload 大小
+- **谨慎** 在 `allDishes` / `dishes` 中增加新属性；每多一个字段都会放大 setData 体积
+
+### 2. onLoad 与 applyRecord 中的同步逻辑
+
+- **禁止** 在 menu-list `onLoad` 或 `applyRecord` 中增加耗时的同步计算（如复杂正则、大数组遍历、多次 JSON 解析）
+- **保持** `pendingRecord` 机制：index 页识别完成后写入 `app.globalData.pendingRecord`，menu-list 优先使用，避免二次 `getRecordById` 请求
+- **谨慎** 在 `inferDishCategory`、`normalizeIngredients`、`normalizeOptionGroups` 等函数中增加更复杂的匹配逻辑
+
+### 3. WXML 与渲染复杂度
+
+- **禁止** 在 menu-list 首屏可见区域增加不必要的 `wx:if`、`wx:for` 嵌套或深层组件
+- **谨慎** 增加新的 van- 组件或自定义组件；每个组件都会增加渲染开销
+- **保持** 首屏 `wx:for` 的 `wx:key` 稳定，避免列表重排导致卡顿
+
+### 4. 跳转时机
+
+- **禁止** 在 index 页 `wx.navigateTo` 之前增加额外的 `await`、网络请求或长时间同步操作
+- **保持** 当前顺序：`setData({ loading: false })` → `consumeUsage()` → `wx.navigateTo`，不在中间插入阻塞逻辑
+
+## 修改前的自检
+
+在改动 `miniprogram/pages/index` 或 `miniprogram/pages/menu-list` 时，问自己：
+
+1. 是否增加了 setData 的数据量或调用次数？
+2. 是否在 onLoad/applyRecord 中增加了新的同步计算？
+3. 是否在首屏 WXML 中增加了新的条件渲染或列表？
+4. 是否在跳转前增加了新的阻塞操作？
+
+若任一答案为「是」，需评估对跳转与首屏性能的影响，必要时做分批加载或懒加载。

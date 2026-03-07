@@ -37,12 +37,13 @@
       scroll-with-animation="true"
       enhanced="true"
     >
-      <view wx:if="{{processing || timeoutHint}}" class="menu-list__status card">
+      <view wx:if="{{processing || timeoutHint || menuTooLongHint}}" class="menu-list__status card">
         <view wx:if="{{processing}}" class="menu-list__status-row">
           <text class="menu-list__status-emoji">👨‍🍳</text>
-          <text class="menu-list__status-text">正在识别中，已解析 {{allDishes.length}} 道菜</text>
+          <text class="menu-list__status-text">{{allDishes.length > 0 ? '正在识别中，已解析 ' + allDishes.length + ' 道菜' : '正在识别第一道菜...'}}</text>
         </view>
         <text wx:if="{{timeoutHint}}" class="menu-list__timeout-text">{{timeoutHint}}</text>
+        <text wx:if="{{menuTooLongHint && !processing}}" class="menu-list__menutoolong-hint">{{menuTooLongHint}}</text>
       </view>
 
       <view class="header-card card" wx:if="{{imageFileID}}">

@@ -85,7 +85,7 @@
         <text class="brand__zh">洋菜单</text>
         <text class="brand__en">YangMenu</text>
       </view>
-      <text class="brand__slogan">你的 AI 点餐翻译官</text>
+      <text class="brand__slogan">你的AI点餐翻译官，帮你搞懂每道菜</text>
     </view>
   </view>
 
@@ -108,29 +108,26 @@
       </view>
     </view>
     <text class="ai-title">拍照识菜</text>
-    <text class="ai-desc">不止翻译，帮你搞懂每道菜</text>
+    <view class="hint-bubble">
+      <van-icon name="info-o" size="16" class="hint-icon" />
+      <text class="hint-text">建议长菜单分页拍摄，识别会更稳</text>
+    </view>
+    <view class="secondary-actions">
+      <view class="btn-pill btn-pill--glass {{isProcessing ? 'btn-pill--disabled' : ''}}" bindtap="onChooseAlbum" hover-class="hover-scale">
+        <van-icon name="photo" size="18" class="btn-icon" />
+        <text class="btn-text">相册选图</text>
+      </view>
+      <view class="btn-pill btn-pill--glass {{isProcessing ? 'btn-pill--disabled' : ''}}" bindtap="onManualInput" hover-class="hover-scale">
+        <van-icon name="edit" size="18" class="btn-icon" />
+        <text class="btn-text">手动输入</text>
+      </view>
+    </view>
   </view>
 
   <view class="index__highlights">
     <text class="index__highlight-tag">🧠 AI 深度解读</text>
     <text class="index__highlight-tag">🌍 支持所有语言</text>
     <text class="index__highlight-tag">⚡ 10秒出结果</text>
-  </view>
-
-  <view class="secondary-actions">
-    <view class="btn-pill card {{isProcessing ? 'btn-pill--disabled' : ''}}" bindtap="onChooseAlbum" hover-class="hover-scale">
-      <van-icon name="photo" size="20" class="btn-icon" />
-      <text class="btn-text">相册选图</text>
-    </view>
-    <view class="btn-pill card {{isProcessing ? 'btn-pill--disabled' : ''}}" bindtap="onManualInput" hover-class="hover-scale">
-      <van-icon name="edit" size="20" class="btn-icon" />
-      <text class="btn-text">手动输入</text>
-    </view>
-  </view>
-
-  <view class="hint-bubble">
-    <van-icon name="info-o" size="16" class="hint-icon" />
-    <text class="hint-text">建议长菜单分页拍摄，识别会更稳</text>
   </view>
 
   <view class="history-module">

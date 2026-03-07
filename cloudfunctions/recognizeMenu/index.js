@@ -21,8 +21,8 @@ const AI_MODEL = "deepseek-v3.2";
 const AI_HOST = "api.lkeap.cloud.tencent.com";
 const AI_PATH = "/v1/chat/completions";
 const AI_TIMEOUT_MS = 55000;
-const AI_MAX_TOKENS = 2800;
-const OCR_INPUT_MAX_CHARS = 4800;
+const AI_MAX_TOKENS = 3200;
+const OCR_INPUT_MAX_CHARS = 3200;
 
 const SHARED_HTTP_AGENT = new https.Agent({
   keepAlive: true,
@@ -63,7 +63,9 @@ const DEEPSEEK_PROMPT = `你是菜单识别与菜品介绍助手。请基于 OCR
 - 重要：每道菜都必须单独包含 price 字段；若菜单为多列（菜名一列、价格一列），请按行对应将价格填入该行的菜品对象中，不要只填第一道。
 - ingredients 提取 2-6 个核心食材；无法判断时返回 []，禁止占位词如 "食材A"、"ingredient 1"。
 - 只根据 OCR 文本合理推断，不要编造明显超出上下文的信息。
-- 若 OCR 文本明显不是菜单（如路牌、广告、文档、书籍、网页等），请返回 {"isMenu": false, "dishes": []}，不要尝试解析菜品。`;
+- 若 OCR 文本明显不是菜单（如路牌、广告、文档、书籍、网页等），请返回 {"isMenu": false, "dishes": []}，不要尝试解析菜品。
+
+【质量优先】宁可少解析几道菜，也要保证每道菜的介绍充实有意义。若 OCR 文本较长，只处理前 15-20 道菜并给出丰富详尽的 description、flavor、recommendation，不要为凑数量而牺牲质量。description 至少 2-3 句，flavor 和 recommendation 要具体。`;
 
 /** 腾讯云 API 3.0 TC3-HMAC-SHA256 签名（无 SDK，减小云函数体积） */
 function signTc3(secretKey, date, service, stringToSign) {
@@ -166,18 +168,20 @@ function optimizeOcrText(raw) {
     if (seen.has(key)) continue;
     seen.add(key);
     deduped.push(line);
-    if (deduped.length >= 500) break;
+    if (deduped.length >= 200) break;
   }
 
   const merged = deduped.join("\n");
-  if (merged.length <= OCR_INPUT_MAX_CHARS) return merged;
-  return merged.slice(0, OCR_INPUT_MAX_CHARS);
+  if (merged.length <= OCR_INPUT_MAX_CHARS) return { text: merged, truncated: false };
+  return { text: merged.slice(0, OCR_INPUT_MAX_CHARS), truncated: true };
 }
 
 /** 第2步：调用 DeepSeek-V3 流式意译，边收边写 partialDishes 到 record */
 function callDeepSeekStream(ocrText, recordId) {
   return new Promise((resolve, reject) => {
-    const optimizedText = optimizeOcrText(ocrText);
+    const ocrResult = optimizeOcrText(ocrText);
+    const optimizedText = ocrResult.text ?? ocrResult;
+    const truncated = ocrResult.truncated ?? false;
     const userContent = `菜单 OCR 结果：
 """
 ${optimizedText}
@@ -207,7 +211,8 @@ ${DEEPSEEK_PROMPT}`;
     let acc = "";
     let lastPartialCount = 0;
     let lastUpdateTime = 0;
-    const THROTTLE_MS = 400;
+    let finishReason = null;
+    const THROTTLE_MS = 150;
     const records = db.collection("scan_records");
 
     /** 流式推送：有新菜品立即写入；同数量时每 400ms 推送一次更完整的 detail，确保部分卡片出现即可查看详情 */
@@ -260,17 +265,20 @@ ${DEEPSEEK_PROMPT}`;
           if (line.startsWith("data: ") && line !== "data: [DONE]") {
             try {
               const json = JSON.parse(line.slice(6));
-              const content = json.choices?.[0]?.delta?.content;
-                if (content) {
+              const choice = json.choices?.[0];
+              const content = choice?.delta?.content;
+              const reason = choice?.finish_reason;
+              if (reason) finishReason = reason;
+              if (content) {
                 acc += content;
-                let partial = parser.tryParsePartialDishes(acc);
+                let partial = parser.parseDishesFallback(acc);
+                if (!partial || partial.length === 0) {
+                  partial = parser.tryParsePartialDishes(acc);
+                }
                 if (!partial || partial.length === 0) {
                   try {
                     partial = parser.parseDishesMinimal(acc) || [];
                   } catch (_) {}
-                }
-                if (!partial || partial.length === 0) {
-                  partial = parser.parseDishesFallback(acc);
                 }
                 if (partial && partial.length > 0) {
                   const ocrPrices = parser.extractPricesFromOcrText(ocrText);
@@ -290,10 +298,12 @@ ${DEEPSEEK_PROMPT}`;
             try {
               const json = JSON.parse(buf.slice(6));
               const content = json.choices?.[0]?.delta?.content;
+              const reason = json.choices?.[0]?.finish_reason;
+              if (reason) finishReason = reason;
               if (content) acc += content;
             } catch (_) {}
           }
-          resolve(acc.trim());
+          resolve({ text: acc.trim(), finishReason, truncated });
         } catch (e) {
           reject(e);
         }
@@ -313,7 +323,8 @@ ${DEEPSEEK_PROMPT}`;
 /** 第2步：调用 DeepSeek-V3 意译（非流式，一次性返回） */
 function callDeepSeekWithText(ocrText) {
   return new Promise((resolve, reject) => {
-    const optimizedText = optimizeOcrText(ocrText);
+    const ocrResult = optimizeOcrText(ocrText);
+    const optimizedText = ocrResult.text ?? ocrResult;
     const userContent = `菜单 OCR 结果：
 """
 ${optimizedText}
@@ -453,7 +464,11 @@ exports.main = async (event) => {
         return { success: false, error: msg };
       }
 
-      const aiText = await callDeepSeekStream(ocrText, recordId);
+      const streamResult = await callDeepSeekStream(ocrText, recordId);
+      const aiText = typeof streamResult === "string" ? streamResult : streamResult.text;
+      const finishReason = typeof streamResult === "object" ? streamResult.finishReason : null;
+      const ocrTruncated = typeof streamResult === "object" ? streamResult.truncated : false;
+      const menuTooLong = finishReason === "length" || ocrTruncated;
       const meta = parser.parseAiResponseMeta(aiText);
       if (meta && meta.isMenu === false) {
         const msg = "当前图片似乎不是菜单，请拍摄餐厅菜单进行识别";
@@ -472,9 +487,11 @@ exports.main = async (event) => {
       if (ocrPrices.length > 0) {
         dishes = parser.applyPricesByIndex(dishes, ocrPrices);
       }
-      await records.doc(recordId).update({
-        data: { dishes, status: "done", partialDishes: [] },
-      });
+      const updateData = { dishes, status: "done", partialDishes: [] };
+      if (menuTooLong) {
+        updateData.menuTooLongHint = "当前菜单太长，识别不完整。请你分段拍摄，以获取最佳体验。";
+      }
+      await records.doc(recordId).update({ data: updateData });
       return { success: true };
     } catch (e) {
       console.error("recognizeMenu stream worker error:", e);

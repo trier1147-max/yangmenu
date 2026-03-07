@@ -5,6 +5,11 @@ const db = cloud.database();
 
 const BASE_LIMIT = 6;
 const MAX_LIMIT = 12;
+
+// 白名单 openid，不限制使用次数。获取方式：云开发控制台 → 数据库 users 集合查看 _openid
+const WHITELIST_OPENIDS = [
+  'oxqZ21_TvqEBqjgmz8RxwM5YO8Vo',
+];
 const BONUS_FRIENDS = 2;
 const BONUS_TIMELINE = 4;
 
@@ -20,11 +25,16 @@ exports.main = async (event) => {
     return { success: false, error: "无法获取 openid" };
   }
 
+  const isWhitelisted = WHITELIST_OPENIDS.includes(openid);
+
   const today = todayStr();
   const users = db.collection("users");
 
   // action: consume - 消耗一次使用次数
   if (event.action === "consume") {
+    if (isWhitelisted) {
+      return { success: true };
+    }
     let { data } = await users.where({ _openid: openid }).get();
     let user = data[0];
     if (!user) {
@@ -61,6 +71,9 @@ exports.main = async (event) => {
 
   // action: addBonus - 分享奖励，amount: 2=朋友 4=朋友圈
   if (event.action === "addBonus") {
+    if (isWhitelisted) {
+      return { success: true, remaining: 999 };
+    }
     const amount = event.amount === 4 ? BONUS_TIMELINE : BONUS_FRIENDS;
     let { data } = await users.where({ _openid: openid }).get();
     let user = data[0];
@@ -101,6 +114,20 @@ exports.main = async (event) => {
   }
 
   // 默认：查询用户信息
+  if (isWhitelisted) {
+    return {
+      success: true,
+      openid,
+      user: {
+        _openid: openid,
+        dailyUsage: 0,
+        dailyBonus: 994,
+        lastUsageDate: today,
+        createdAt: new Date(),
+      },
+    };
+  }
+
   const { data } = await users.where({ _openid: openid }).get();
   let user = data[0];
 

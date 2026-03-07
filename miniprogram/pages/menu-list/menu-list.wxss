@@ -63,6 +63,13 @@
   color: #b86b00;
 }
 
+.menu-list__menutoolong-hint {
+  display: block;
+  margin-top: 12rpx;
+  font-size: 26rpx;
+  color: var(--text-sub);
+}
+
 .menu-list__error {
   padding: 100rpx 32rpx;
   text-align: center;

@@ -17,19 +17,20 @@ You are a senior WeChat mini program developer. You write clean, production-read
 miniprogram/
 ├── app.ts / app.json / app.wxss
 ├── pages/
-│   ├── index/           # Home: camera + album + manual input + recent records
+│   ├── index/           # Home: camera + album + manual input + recent records + usage limit
 │   ├── menu-list/       # Dish list with expandable cards, category filter, order summary
 │   └── history/         # Full scan history
 ├── services/
 │   ├── ai.ts            # recognizeMenu, recognizeMenuStream, recognizeManualDishes, saveRecord, uploadImage
-│   ├── cloud.ts         # callFunction, uploadImage
-│   └── history.ts       # getRecordById, deleteRecordById, getRecentRecords
+│   ├── cloud.ts         # callFunction, uploadImage (Result<T> pattern)
+│   ├── history.ts       # getRecordById, deleteRecordById, getRecentRecords
+│   └── user.ts          # checkUsage, consumeUsage, addShareBonus
 ├── utils/
 │   └── types.ts         # User, ScanRecord, Dish, DishDetail, Result
 cloudfunctions/
 ├── recognizeMenu/       # OCR + DeepSeek: image/manual → dishes (stream + batch modes)
 ├── saveRecord/          # Save dishes to scan_records
-└── getUserInfo/         # Get/create user record (openid, dailyUsage)
+└── getUserInfo/         # Get/create user, daily usage limit, consume, addBonus
 ```
 
 ## Database Collections
@@ -38,6 +39,7 @@ cloudfunctions/
 interface User {
   _openid: string;
   dailyUsage: number;
+  dailyBonus: number;      // 分享奖励累计，每日重置
   lastUsageDate: string;
   createdAt: Date;
 }
@@ -77,6 +79,13 @@ interface DishOptionGroup {
 }
 ```
 
+## Usage Limit (每日次数)
+- Base: 6 次/日，分享给朋友 +2 次，分享到朋友圈 +4 次，上限 12 次
+- checkUsage() 在拍照/相册/手动输入前调用，remaining <= 0 时弹 showLimitDialog
+- consumeUsage() 在识别成功后调用
+- addShareBonus(2|4) 在 onShareAppMessage / onShareTimeline 中调用
+- getUserInfo 云函数支持 action: "consume" | "addBonus"
+
 ## AI Strategy
 - **Single photo (stream)**: recognizeMenuStream → creates record with status "processing" → worker updates partialDishes in real time → frontend polls getRecordById
 - **Multi-photo (batch)**: recognizeMenu per image → saveRecord merges all dishes
@@ -85,7 +94,7 @@ interface DishOptionGroup {
 - Loading UX: full-screen overlay with emoji/badge/text (e.g. "大厨正在解读这份菜单...")
 
 ## AI Integration - OCR + DeepSeek-V3
-- Step 1 OCR: 腾讯云 GeneralBasicOCR (tencentcloud-sdk-nodejs or raw TC3-HMAC-SHA256)
+- Step 1 OCR: 腾讯云 GeneralBasicOCR (TC3-HMAC-SHA256 无 SDK)
 - Step 2: 腾讯云知识引擎 DeepSeek-V3 意译为结构化 JSON
 - Env vars: LKEAP_API_KEY, TENCENT_SECRET_ID, TENCENT_SECRET_KEY
 - Endpoint: https://api.lkeap.cloud.tencent.com/v1/chat/completions
@@ -95,11 +104,11 @@ interface DishOptionGroup {
 
 ## Coding Rules
 - TypeScript strict mode, all variables and params typed
-- File naming: kebab-case (menu-list.ts, dish-card.wxml)
-- Component naming: kebab-case (dish-card, photo-actions)
+- File naming: kebab-case (menu-list.ts, index.wxml)
+- Component naming: kebab-case (van-popup, van-dialog)
 - Cloud function naming: camelCase (recognizeMenu, saveRecord, getUserInfo)
 - CSS class naming: BEM (block__element--modifier)
-- Max 150 lines per file, split if longer
+- Prefer splitting files > 200 lines; complex pages may exceed
 - Chinese comments for function purpose, English for inline logic
 - Handle errors at function start with early returns
 - Use guard clauses, avoid deeply nested if statements
@@ -119,24 +128,35 @@ page {
   --color-border: #E8E8E8;
   --text-main: #1A1A1A;
   --text-sub: #999999;
+  --text-link: #666666;
   --gradient-primary: linear-gradient(135deg, #FF9800 0%, #FB8C00 50%, #E65100 100%);
-  --radius-card: 48rpx;
+  --glass-noise: url("data:image/svg+xml,...");
+  --glass-blur: blur(40px) saturate(180%);
+  --glass-border: rgba(255, 255, 255, 0.5);
   --glass-shadow: 0 16rpx 40rpx rgba(0,0,0,0.04), inset 0 1px 0 rgba(255,255,255,0.6);
 }
+.card { border-radius: 48rpx; }
 ```
 
 ## Key Business Logic
-- No usage limits enforced in frontend — users can scan unlimited times
+- Usage limit: 6 base + share bonus (max 12), enforced via getUserInfo
 - Auth: wx.login + getUserInfo cloud function → openid
 - Multi-page menu: up to 6 photos per session
-- Image compression: wx.compressImage (quality 50, width 960) before upload
-- Expand/collapse: tap dish card to toggle detail, pure frontend
-- Category filter: inferDishCategory (沙拉/意面/牛排/披萨/汤品/海鲜/鸡肉/甜点/饮品/其他)
-- Order summary: add/decrease per dish, order bar, order detail panel with scroll-to-dish
-- OCR price extraction: extractPricesFromOcrText + applyPricesByIndex for multi-column menus
+- Image validation: size <= 4MB, format jpg/jpeg/png
+- Image compression: wx.compressImage (quality 50, compressedWidth 960) before upload
+- Manual input: parseManualNames supports 逗号/分号/顿号/换行分隔，最多 40 道菜
+- Expand/collapse: tap dish card to toggle detail, _expandedKeys Set for state
+- Category filter: inferDishCategory (沙拉/汤品/意面/烩饭/炖菜/烤物/牛排/披萨/汉堡/三明治/炸物/寿司/煎饼/面包/冷盘/派/海鲜/饮品/鸡肉/猪肉/羊肉/咖喱/塔可卷饼/小食/甜点/其他)
+- Order summary: _orderMap, add/decrease per dish, order bar, order detail panel with scroll-to-dish
+- pendingRecord: app.globalData 缓存 record，供 menu-list 直接使用，避免二次请求
 
 ## Vant Components Used
-van-button, van-cell, van-cell-group, van-icon, van-image, van-loading, van-toast, van-empty, van-tag, van-action-sheet, van-overlay
+van-button, van-cell, van-cell-group, van-icon, van-image, van-loading, van-toast, van-empty, van-tag, van-action-sheet, van-overlay, van-popup, van-dialog
+
+## App Config (app.json)
+- lazyCodeLoading: "requiredComponents"
+- enableShareAppMessage, enableShareTimeline: true
+- permission.scope.userLocation: 用于识别城市，提供更精准菜品文化背景
 
 ## Don'ts
 - No cross-platform frameworks (Taro, uni-app)

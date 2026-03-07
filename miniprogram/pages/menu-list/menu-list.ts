@@ -21,6 +21,7 @@ interface ScanRecordLike {
   status?: ScanRecordStatus;
   imageFileID?: string;
   errorMessage?: string;
+  menuTooLongHint?: string;
 }
 
 const INGREDIENT_ZH_MAP: Record<string, string> = {
@@ -293,6 +294,7 @@ Page({
     initialLoading: true,
     processing: false,
     timeoutHint: "",
+    menuTooLongHint: "",
     error: "",
   },
 
@@ -300,6 +302,8 @@ Page({
   _pollTimer: 0 as number,
   _expandedKeys: new Set<string>(),
   _orderMap: new Map<string, number>(),
+  /** 原始 detail，用于首次展开时延迟计算 ingredients/options */
+  _rawDetailMap: new Map<string, Record<string, unknown>>(),
 
   async onLoad(options: { recordId?: string; from?: string }) {
     const recordId = options?.recordId ?? "";
@@ -310,6 +314,7 @@ Page({
       initialLoading: true,
       processing: false,
       timeoutHint: "",
+      menuTooLongHint: "",
       error: "",
       activeCategory: "all",
     });
@@ -346,10 +351,12 @@ Page({
         return;
       }
 
-      this.applyRecord(record);
-      if (record.status === "processing") {
-        this.startPolling(recordId);
-      }
+      wx.nextTick(() => {
+        this.applyRecord(record);
+        if (record.status === "processing") {
+          this.startPolling(recordId);
+        }
+      });
     } catch {
       this.setData({ initialLoading: false, error: "加载失败，请重试" });
     }
@@ -360,6 +367,7 @@ Page({
     const menuCurrencySymbol = detectMenuCurrencySymbol(list);
 
     const dishes: MenuListDish[] = list.map((d, index) => {
+      const key = this.getDishIdentity(d, index);
       const normalizedDescription =
         String(d.detail?.description || "").toLowerCase() === "manual input"
           ? ""
@@ -368,32 +376,21 @@ Page({
         (d.detail as { introduction?: string } | null)?.introduction?.trim() ||
         normalizedDescription;
 
+      // 首屏只算必要字段，ingredients/options 延迟到首次展开时计算；已展开的需立即算全
+      const needFullDetail = this._expandedKeys.has(key);
       const detail = d.detail
-        ? Object.assign(
-            {},
-            {
-              description: "",
-              introduction: "",
-              ingredients: [] as string[],
-              flavor: "",
-              price: "",
-              options: [] as { group: string; rule: string; choices: string[] }[],
-              recommendation: "",
-            },
-            d.detail,
-            {
-              description: normalizedDescription,
-              introduction,
-              ingredients: normalizeIngredients(d.detail?.ingredients),
-              flavor: d.detail?.flavor || "",
-              price: applyCurrencySymbol(
-                normalizePrice((d.detail as { price?: string })?.price),
-                menuCurrencySymbol
-              ),
-              options: normalizeOptionGroups((d.detail as { options?: unknown[] })?.options),
-              recommendation: d.detail?.recommendation || "",
-            }
-          )
+        ? {
+            description: normalizedDescription,
+            introduction,
+            ingredients: needFullDetail ? normalizeIngredients(d.detail?.ingredients) : ([] as string[]),
+            flavor: d.detail?.flavor || "",
+            price: applyCurrencySymbol(
+              normalizePrice((d.detail as { price?: string })?.price),
+              menuCurrencySymbol
+            ),
+            options: needFullDetail ? normalizeOptionGroups((d.detail as { options?: unknown[] })?.options) : ([] as { group: string; rule: string; choices: string[] }[]),
+            recommendation: d.detail?.recommendation || "",
+          }
         : {
             description: "",
             introduction: "",
@@ -403,7 +400,9 @@ Page({
             options: [] as { group: string; rule: string; choices: string[] }[],
             recommendation: "",
           };
-      const key = this.getDishIdentity(d, index);
+      if (d.detail && !needFullDetail) {
+        this._rawDetailMap.set(key, d.detail as Record<string, unknown>);
+      }
       const orderCount = this._orderMap.get(key) || 0;
       return Object.assign({}, d, {
         key,
@@ -416,6 +415,7 @@ Page({
 
     const processing = record.status === "processing";
     const error = record.status === "error" ? record.errorMessage || "识别失败" : "";
+    const menuTooLongHint = record.menuTooLongHint || "";
     const hasProgress = dishes.length > 0;
     const clearHint = !processing || hasProgress;
 
@@ -437,6 +437,7 @@ Page({
       initialLoading: false,
       processing,
       timeoutHint: clearHint ? "" : this.data.timeoutHint,
+      menuTooLongHint,
       error,
       orderDishCount: summary.orderDishCount,
       orderItemCount: summary.orderItemCount,
@@ -456,6 +457,20 @@ Page({
     const name = String(dish.originalName ?? "").trim();
     const brief = String(dish.briefCN ?? "").trim();
     return `${name}__${brief}__${index}`;
+  },
+
+  /** 首次展开时计算 ingredients/options，减少首屏 setData 体积 */
+  ensureDetailForExpand(dish: MenuListDish): MenuListDish {
+    const key = dish.key || this.getDishIdentity(dish, 0);
+    const raw = this._rawDetailMap.get(key);
+    if (!raw || (dish.detail?.ingredients?.length ?? 0) > 0) return dish;
+    const ingredients = normalizeIngredients(raw.ingredients);
+    const options = normalizeOptionGroups(raw.options);
+    this._rawDetailMap.delete(key);
+    return {
+      ...dish,
+      detail: { ...dish.detail, ingredients, options },
+    };
   },
 
   buildCategories(dishes: MenuListDish[]) {
@@ -593,10 +608,28 @@ Page({
     const tick = async () => {
       if (Date.now() - pollStartTime > 90_000) {
         this.stopPolling();
-        this.setData({
-          processing: false,
-          error: "识别超时，请返回重试",
-        });
+        try {
+          const lastRecord = await getRecordById(recordId) as ScanRecordLike | null;
+          const partialCount = (lastRecord?.partialDishes?.length ?? 0) || (lastRecord?.dishes?.length ?? 0);
+          if (lastRecord && partialCount > 0) {
+            this.applyRecord(lastRecord);
+            this.setData({
+              processing: false,
+              error: "",
+              menuTooLongHint: "当前菜单太长，识别不完整。请你分段拍摄，以获取最佳体验。",
+            });
+          } else {
+            this.setData({
+              processing: false,
+              error: "识别超时，请返回重试",
+            });
+          }
+        } catch {
+          this.setData({
+            processing: false,
+            error: "识别超时，请返回重试",
+          });
+        }
         return;
       }
 
@@ -664,15 +697,17 @@ Page({
     // Guard: undefined/invalid dataset.index yields NaN; avoid crash on dishes[NaN]
     if (Number.isNaN(index) || index < 0 || index >= dishes.length) return;
 
-    const dish = dishes[index];
+    let dish = dishes[index];
     const key = dish.key || this.getDishIdentity(dish, index);
     const nextExpanded = !dish.expanded;
     if (dish.expanded) this._expandedKeys.delete(key);
     else this._expandedKeys.add(key);
 
+    if (nextExpanded) dish = this.ensureDetailForExpand(dish);
+
     const allDishes = this.data.allDishes.map((item: MenuListDish, itemIndex: number) => {
       const itemKey = item.key || this.getDishIdentity(item, itemIndex);
-      return itemKey === key ? Object.assign({}, item, { expanded: nextExpanded }) : item;
+      return itemKey === key ? Object.assign({}, dish, { expanded: nextExpanded }) : item;
     });
     const nextDishes = this.filterDishesByCategory(allDishes, this.data.activeCategory);
     this.setData({ allDishes, dishes: nextDishes });

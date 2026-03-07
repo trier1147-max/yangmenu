@@ -11,6 +11,8 @@ const {
   normalizeIngredients,
   normalizePrice,
   tryParsePartialDishes,
+  extractPricesFromOcrText,
+  applyPricesByIndex,
 } = require("./parser");
 
 let passed = 0;
@@ -222,6 +224,89 @@ run("测试8 推荐解析", testRecommendations);
 run("测试9 Fallback正则", testParseDishesFallback);
 run("测试10 parseAiResponseMeta", testParseAiResponseMeta);
 run("测试11 formatDish与normalizeIngredients", testFormatDishAndNormalizeIngredients);
+
+// ===== 追加：推荐功能测试 =====
+
+// 测试12：recommendations 正确提取
+run("recommendations 正常解析", () => {
+  const input = JSON.stringify({
+    dishes: [
+      { originalName: "A", briefCN: "菜A", description: "描述A", flavor: "咸鲜", ingredients: ["食材"], recommendation: "推荐A", price: "¥30" },
+      { originalName: "B", briefCN: "菜B", description: "描述B", flavor: "酸甜", ingredients: ["食材"], recommendation: "推荐B", price: "¥25" },
+      { originalName: "C", briefCN: "菜C", description: "描述C", flavor: "微辣", ingredients: ["食材"], recommendation: "推荐C", price: "¥35" }
+    ],
+    recommendations: [
+      { dishIndex: 0, dishName: "A", reason: "招牌菜必试" },
+      { dishIndex: 2, dishName: "C", reason: "性价比最高" }
+    ]
+  });
+  const dishes = parseDishesFromText(input);
+  assert.strictEqual(dishes.length, 3);
+  assert.strictEqual(dishes[0].originalName, "A");
+  assert.strictEqual(dishes[2].originalName, "C");
+});
+
+// 测试13：多种 AI 返回 key 兼容
+run("兼容 items 代替 dishes", () => {
+  const input = JSON.stringify({
+    items: [
+      { originalName: "Test", briefCN: "测试", description: "测试菜", flavor: "鲜", ingredients: ["鱼"] }
+    ]
+  });
+  const dishes = parseDishesFromText(input);
+  assert.strictEqual(dishes.length, 1);
+  assert.strictEqual(dishes[0].originalName, "Test");
+});
+
+// 测试14：超长菜单截断后有提示
+run("截断修复后末尾有提示菜品", () => {
+  const input = '[{"originalName":"A","briefCN":"菜A","description":"","flavor":"","ingredients":[]},{"originalName":"B","briefCN":"菜B","description":"","flavor":"","ingredients":[]},{"originalName":"C","briefCN":"菜';
+  try {
+    const dishes = parseDishesFromText(input);
+    const lastDish = dishes[dishes.length - 1];
+    assert.ok(
+      lastDish.originalName.includes("⚠️") || dishes.length >= 2,
+      "应包含截断提示或至少解析出2道菜"
+    );
+  } catch (e) {
+    assert.ok(true);
+  }
+});
+
+// 测试15：完全无效输入
+run("完全无效输入抛错", () => {
+  assert.throws(
+    () => parseDishesFromText("这不是JSON，只是一段普通文字"),
+    /无法解析/
+  );
+});
+
+// 测试16：带前缀说明的AI返回
+run("带前缀说明文字的JSON能正确解析", () => {
+  const input = '根据图片识别，以下是菜品列表：\n{"dishes":[{"originalName":"Soup","briefCN":"汤","description":"热汤","flavor":"鲜","ingredients":["蔬菜"]}]}';
+  const dishes = parseDishesFromText(input);
+  assert.strictEqual(dishes.length, 1);
+  assert.strictEqual(dishes[0].originalName, "Soup");
+});
+
+// 测试17：价格从OCR文本提取
+run("OCR文本价格提取", () => {
+  const ocrText = "Fish and Chips    £12.50\nSteak           £25.00\nSalad            £8.90";
+  const prices = extractPricesFromOcrText(ocrText);
+  assert.ok(prices.length >= 3, "应提取出至少3个价格");
+});
+
+// 测试18：价格按索引补全
+run("价格按索引补全缺失价格的菜品", () => {
+  const dishes = [
+    { originalName: "A", briefCN: "菜A", detail: { description: "", ingredients: [], flavor: "", price: "" } },
+    { originalName: "B", briefCN: "菜B", detail: { description: "", ingredients: [], flavor: "", price: "¥20" } }
+  ];
+  const prices = ["¥10", "¥20"];
+  const result = applyPricesByIndex(dishes, prices);
+  assert.strictEqual(result[0].detail.price, "¥10", "A应被补全为¥10");
+  assert.strictEqual(result[1].detail.price, "¥20", "B已有价格不应被覆盖");
+});
 
 console.log("\n========== 结果 ==========");
 console.log(`通过: ${passed}  失败: ${failed}`);

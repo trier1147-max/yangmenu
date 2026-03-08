@@ -15,6 +15,12 @@ interface MenuCategory {
   count: number;
 }
 
+interface Recommendation {
+  dishIndex: number;
+  dishName: string;
+  reason: string;
+}
+
 interface ScanRecordLike {
   dishes?: Dish[];
   partialDishes?: Dish[];
@@ -22,6 +28,7 @@ interface ScanRecordLike {
   imageFileID?: string;
   errorMessage?: string;
   menuTooLongHint?: string;
+  recommendations?: Recommendation[];
 }
 
 const INGREDIENT_ZH_MAP: Record<string, string> = {
@@ -226,48 +233,93 @@ function normalizeOptionGroups(raw: unknown) {
 }
 
 function inferDishCategory(dish: Pick<Dish, "originalName" | "briefCN" | "detail">) {
-  // 优先用 originalName（菜单原文/英文）匹配，避免中文歧义（如 鸡尾酒→鸡肉）
-  const text = [
+  // 只用菜名和 briefCN 做分类，不用描述/食材——避免"含面包的拼盘"被误归为面包类
+  const nameText = [
     String(dish.originalName || ""),
     String(dish.briefCN || ""),
-    String((dish.detail as { introduction?: string; description?: string; background?: string } | null)?.introduction || dish.detail?.description || ""),
-    String((dish.detail as { background?: string } | null)?.background || ""),
-    String(dish.detail?.flavor || ""),
-  ]
-    .join(" ")
-    .toLowerCase();
+  ].join(" ").toLowerCase();
 
-  // 顺序重要：更具体的品类放前面。匹配以英文原文为主，展示仍为中文。
+  // 顺序重要：拼盘/组合最优先；具体形式（汤/面/饭）优先于食材（鸡/猪/羊）
   const rules: Array<{ label: string; patterns: RegExp[] }> = [
-    { label: "沙拉", patterns: [/salad|沙拉/] },
-    { label: "汤品", patterns: [/soup|bisque|chowder|gazpacho|汤|浓汤|汤品|冷汤/] },
-    { label: "意面", patterns: [/pasta|spaghetti|linguine|fettuccine|penne|lasagna|ravioli|gnocchi|意面|意粉|通心粉|意式饺子/] },
-    { label: "烩饭", patterns: [/risotto|paella|烩饭|海鲜饭/] },
-    { label: "炖菜", patterns: [/stew|ragu|confit|ratatouille|炖|烩菜|勃艮第|油封|普罗旺斯炖菜/] },
-    { label: "烤物", patterns: [/grill|grilled|roast|roasted|烤鸡|烤鱼|烤肉|烤羊|烤鸭|烤蔬菜|烧烤/] },
-    { label: "牛排", patterns: [/steak|sirloin|ribeye|tenderloin|t-?bone|牛排|菲力|西冷|肋眼/] },
-    { label: "披萨", patterns: [/pizza|披萨/] },
-    { label: "汉堡", patterns: [/burger|hamburger|汉堡|汉堡包|芝士堡|牛肉堡|鸡堡|鱼堡|虾堡/] },
-    { label: "三明治", patterns: [/sandwich|sub|panini|三明治|三文治|潜艇堡|帕尼尼/] },
-    { label: "炸物", patterns: [/fries|fried chicken|chicken wings|wings|nuggets|schnitzel|炸鸡|炸薯条|鸡翅|鸡米花|薯条|薯格|炸肉排/] },
-    { label: "寿司", patterns: [/sushi|sashimi|nigiri|maki|寿司|刺身|手卷|卷物/] },
-    { label: "煎饼", patterns: [/crepe|pancake|waffle|煎饼|可丽饼|华夫/] },
-    { label: "面包", patterns: [/bread|croissant|pretzel|toast|baguette|面包|可颂|碱水结|吐司|法棍/] },
-    { label: "冷盘", patterns: [/charcuterie|prosciutto|jamón|gravlax|冷盘|冷切|腌肉|帕尔马火腿|伊比利亚|腌鱼|烟熏三文鱼/] },
-    { label: "派", patterns: [/pie|quiche|派|法式咸派|酥皮/] },
-    { label: "海鲜", patterns: [/seafood|shrimp|prawn|salmon|cod|octopus|mussel|海鲜|虾|蟹|贝|三文鱼|鳕鱼|青口|章鱼/] },
-    { label: "饮品", patterns: [/cocktail|mojito|margarita|martini|negroni|aperol|spritz|wine|beer|coffee|tea|juice|latte|espresso|smoothie|sangria|gin|vodka|rum|whisky|whiskey|liqueur|鸡尾酒|饮品|咖啡|茶|果汁|苏打|汽水|拿铁|美式|奶昔/] },
-    { label: "鸡肉", patterns: [/chicken\b|chicken\s|鸡肉|鸡腿|鸡胸|鸡块|鸡(?!尾)/] },
-    { label: "猪肉", patterns: [/pork|wurst|bratwurst|猪排|猪肘|猪肉|香肠/] },
-    { label: "羊肉", patterns: [/lamb|mutton|羊排|羊肉|羊腿/] },
-    { label: "咖喱", patterns: [/curry|咖喱/] },
-    { label: "塔可卷饼", patterns: [/taco|burrito|wrap|fajita|塔可|卷饼/] },
-    { label: "小食", patterns: [/appetizer|starter|tapas|bruschetta|小食|开胃菜|小菜|前菜|小食拼盘|意式烤面包/] },
-    { label: "甜点", patterns: [/dessert|cake|pudding|ice cream|tiramisu|macaron|churros|soufflé|甜点|蛋糕|布丁|提拉米苏|冰淇淋|马卡龙|蛋挞|舒芙蕾/] },
+    // ── 组合类（必须最先，防止被食材类误判）
+    { label: "拼盘", patterns: [/platter|board|sharing|assorted|tasting|combination|selection|mixed|charcuterie.?board|antipasto|拼盘|拼板|拼碟|什锦|拼|组合|精选拼|分享盘/] },
+
+    // ── 饮品（在鸡/茶等单字前先排除）
+    { label: "饮品", patterns: [/\bcocktail|mocktail|mojito|margarita|martini|negroni|aperol|spritz|\bwine\b|\bbeer\b|\bcoffee\b|\btea\b|\bjuice\b|\blatte\b|\bespresso\b|\bcappuccino\b|\bamericano\b|\bsmoothie\b|\bsangria\b|\bgin\b|\bvodka\b|\brum\b|\bwhisky|\bwhiskey|\bliqueur\b|\bmilkshake\b|\blemonade\b|\bboba\b|鸡尾酒|无酒精饮|饮品|咖啡|奶茶|果茶|花茶|果汁|苏打水|汽水|拿铁|美式咖啡|卡布奇诺|奶昔|柠檬水|果昔|气泡水|冷萃/] },
+
+    // ── 汤品
+    { label: "汤品", patterns: [/\bsoup\b|\bbisque\b|\bchowder\b|\bgazpacho\b|\bvichyssoise\b|\bminestrone\b|\bbouillabaisse\b|\bbouillon\b|\bconsommé\b|汤$|^汤|浓汤|汤品|例汤|冷汤|炖汤|奶油汤|罗宋汤|法式洋葱汤|蛤蜊浓汤/] },
+
+    // ── 沙拉
+    { label: "沙拉", patterns: [/\bsalad\b|沙拉|凯撒|尼斯沙拉|华尔道夫/] },
+
+    // ── 面食·意面
+    { label: "意面", patterns: [/\bpasta\b|\bspaghetti\b|\blinguine\b|\bfettuccine\b|\bpenne\b|\brigatoni\b|\btagliatelle\b|\blasagna\b|\bravioli\b|\btortellini\b|\bgnocchi\b|\borzo\b|意面|意粉|通心粉|意式饺子|宽面|扁面条/] },
+
+    // ── 米饭类
+    { label: "烩饭", patterns: [/\brisotto\b|\bpaella\b|\bpilaf\b|\bfried.?rice\b|烩饭|海鲜饭|炒饭|炖饭|焗饭|盖饭|饭|丼/] },
+
+    // ── 披萨
+    { label: "披萨", patterns: [/\bpizza\b|\bflatbread.{0,8}(pizza|topped)|披萨|比萨|薄饼披萨/] },
+
+    // ── 汉堡
+    { label: "汉堡", patterns: [/\bburger\b|\bhamburger\b|\bsmash.?burger\b|汉堡|汉堡包|芝士堡|牛肉堡|鸡堡|鱼堡|虾堡/] },
+
+    // ── 三明治
+    { label: "三明治", patterns: [/\bsandwich\b|\bsub\b|\bpanini\b|\bclub\b|\bhero\b|\bhoagie\b|三明治|三文治|潜艇堡|帕尼尼/] },
+
+    // ── 炸物（先于鸡肉/猪肉）
+    { label: "炸物", patterns: [/\bfried\b|\bdeep.?fry|\bfritter\b|\bschnitzel\b|\btempura\b|\bcalamari\b|\bchips\b|\bfries\b|\bnugget|\bwing|\btender|\bstrip\b|炸鸡|炸薯条|炸鱿鱼|炸虾|鸡翅|鸡米花|薯条|薯格|炸猪排|炸鱼|裹粉炸/] },
+
+    // ── 烤物·扒类（先于食材类）
+    { label: "烤物", patterns: [/\bgrilled?\b|\broasted?\b|\bbbq\b|\bbarbecue\b|\brotisserie\b|\bchargrilled\b|烤鸡|烤鱼|烤肉|烤羊|烤鸭|烤蔬|烧烤|炙烤|扒|焗烤|明火|炭烤/] },
+
+    // ── 牛排（先于牛肉）
+    { label: "牛排", patterns: [/\bsteak\b|\bsirloin\b|\bribeye\b|\btenderloin\b|\bt.?bone\b|\bentrecôte\b|\bfillet\b(?=.{0,10}(beef|steak|mignon))|\bnew.?york.?strip\b|牛排|菲力|西冷|肋眼|牛扒|霜降牛/] },
+
+    // ── 炖菜·慢煮
+    { label: "炖菜", patterns: [/\bstew\b|\bragu\b|\bconfit\b|\bcassoulet\b|\bossobuco\b|\bratatouille\b|\bbraised?\b|\bslow.?cook|\bcacciatore\b|炖|烩菜|勃艮第|油封|普罗旺斯炖|红酒炖|砂锅|慢煮/] },
+
+    // ── 寿司·日料
+    { label: "寿司", patterns: [/\bsushi\b|\bsashimi\b|\bnigiri\b|\bmaki\b|\btemaki\b|\bomakase\b|\buramaki\b|寿司|刺身|手卷|卷物|鱼生|握寿司|军舰卷/] },
+
+    // ── 煎饼·华夫
+    { label: "煎饼", patterns: [/\bcrepe\b|\bcrêpe\b|\bpancake\b|\bwaffle\b|\bdutch.?baby\b|煎饼|可丽饼|华夫|班戟|薄饼/] },
+
+    // ── 派·挞
+    { label: "派", patterns: [/\bpie\b|\bquiche\b|\btart\b|\bpastry\b(?=.{0,8}(savory|savoury|meat|chicken|veg))|\bwellington\b|派|法式咸派|酥皮|挞|千层酥|惠灵顿/] },
+
+    // ── 冷盘·熟食
+    { label: "冷盘", patterns: [/\bcharcuterie\b|\bprosciutto\b|\bjamón\b|\bgravlax\b|\bantipasto\b|\bbresaola\b|\bcarpaccio\b|冷盘|冷切|腌肉|帕尔马火腿|伊比利亚|腌制|烟熏三文鱼|生牛肉片|熟食/] },
+
+    // ── 面包·烘焙（严格匹配，不含 sandwich 里的面包）
+    { label: "面包", patterns: [/\bbread\b(?!.{0,10}(sandwich|toast\s|crumb|basket|bowl))|\bcroissant\b|\bpretzel\b|\bfocaccia\b|\bciabatta\b|\bsourdough\b|\bbrioche\b|\bbagel\b|\benglis(h)?.?muffin\b|\bnaan\b|\bpita\b|面包|可颂|碱水结|佛卡夏|恰巴塔|酸面包|贝果|皮塔饼/] },
+
+    // ── 海鲜（先于鱼/虾食材）
+    { label: "海鲜", patterns: [/\bseafood\b|\blobster\b|\boyster\b|\bcrab\b|\bprawn\b|\bscallop\b|\bclam\b|\bmussel\b|\boctopus\b|\bsquid\b|\bhalibut\b|\bsea.?bass\b|\bdorade\b|\btuna\b|\bsalmon\b(?!.{0,5}(salad|pasta|roll|sandwich))|\bcod\b|海鲜|龙虾|生蚝|蟹|扇贝|蛤蜊|青口|章鱼|鱿鱼|鳕鱼|比目鱼|鲈鱼|鱼排|鱼扒/] },
+
+    // ── 咖喱
+    { label: "咖喱", patterns: [/\bcurry\b|\btikka\b|\bmasala\b|\bvindaloo\b|\bkorma\b|\bdal\b|\bbiryani\b|咖喱|日式咖喱|泰式咖喱|印度咖喱|黄咖喱|绿咖喱|红咖喱/] },
+
+    // ── 塔可·墨西哥
+    { label: "墨西哥", patterns: [/\btaco\b|\bburrito\b|\bfajita\b|\bquesadilla\b|\benchilada\b|\bnachos\b|\bguacamole\b|\bchimichanga\b|塔可|卷饼|墨西哥|玉米饼|纳乔斯/] },
+
+    // ── 食材类（靠后，只在菜名明确标注时才用）
+    { label: "牛肉", patterns: [/\bbeef\b|\bwagyu\b|\bshort.?rib\b|\bveal\b|牛肉|牛腩|牛尾|炖牛|和牛/] },
+    { label: "鸡肉", patterns: [/\bchicken\b|\bpollo\b|\bpoussin\b|鸡肉|鸡腿|鸡胸|鸡块|鸡扒|嫩鸡|整鸡/] },
+    { label: "猪肉", patterns: [/\bpork\b|\bpig\b|\bpiglet\b|\bwurst\b|\bporchetta\b|\biberico\b|\bprosciutto\b(?!.{0,5}salad)|猪排|猪肘|猪肉|猪脸|烤乳猪|猪小排/] },
+    { label: "羊肉", patterns: [/\blamb\b|\bmutton\b|\bagneau\b|羊排|羊肉|羊腿|羊架/] },
+    { label: "素食", patterns: [/\bvegan\b|\bvegetarian\b|\bveggie\b|\bplant.?based\b|\bv\b(?=\s*[(\[])|素食|纯素|蔬食|全素/] },
+
+    // ── 甜点（接近末尾，不要遮蔽主菜）
+    { label: "甜点", patterns: [/\bdessert\b|\bcake\b|\bpudding\b|\bice.?cream\b|\btiramisu\b|\bmacaron\b|\bchurros\b|\bsoufflé\b|\btrifle\b|\bmousse\b|\bpanna.?cotta\b|\bfondant\b|\bbrownie\b|\bmille.?feuille\b|\bcrème.?brûlée\b|\bprofiterole\b|\bgelato\b|\bsorbet\b|\bcheesecake\b|\bparfait\b|甜点|蛋糕|布丁|提拉米苏|冰淇淋|雪糕|马卡龙|蛋挞|舒芙蕾|慕斯|奶冻|焦糖布丁|泡芙|千层酥|巧克力熔岩/] },
+
+    // ── 开胃小食（最后，避免遮蔽正餐）
+    { label: "小食", patterns: [/\bappetizer\b|\bstarter\b|\btapas\b|\bbruschetta\b|\bamuse.?bouche\b|\bfingers\b|\bsnack\b|小食|开胃菜|小菜|前菜/] },
   ];
 
   for (const rule of rules) {
-    if (rule.patterns.some((pattern) => pattern.test(text))) return rule.label;
+    if (rule.patterns.some((pattern) => pattern.test(nameText))) return rule.label;
   }
   return "其他";
 }
@@ -296,6 +348,7 @@ Page({
     timeoutHint: "",
     menuTooLongHint: "",
     error: "",
+    recommendations: [] as Recommendation[],
   },
 
   _processingTimer: 0 as number,
@@ -317,6 +370,7 @@ Page({
       menuTooLongHint: "",
       error: "",
       activeCategory: "all",
+      recommendations: [],
     });
 
     if (!recordId) {
@@ -414,6 +468,7 @@ Page({
     const processing = record.status === "processing";
     const error = record.status === "error" ? record.errorMessage || "识别失败" : "";
     const menuTooLongHint = record.menuTooLongHint || "";
+    const recommendations: Recommendation[] = processing ? [] : (record.recommendations || []);
     const hasProgress = dishes.length > 0;
     const clearHint = !processing || hasProgress;
 
@@ -443,6 +498,7 @@ Page({
       orderSummaryText: summary.orderSummaryText,
       orderListItems: summary.orderListItems,
       showOrderBar: summary.orderItemCount >= 1,
+      recommendations,
     });
 
     if (record.status === "done" || record.status === "error") {
@@ -768,6 +824,23 @@ Page({
 
   onCloseOrderDetail() {
     this.setData({ orderDetailVisible: false });
+  },
+
+  onRecommendationTap(e: WechatMiniprogram.TouchEvent) {
+    const dishIndex = Number(e.currentTarget.dataset.index ?? -1);
+    if (dishIndex < 0 || dishIndex >= this.data.allDishes.length) return;
+    const { allDishes, activeCategory } = this.data;
+    const scrollToDish = () => {
+      this.setData({ scrollIntoId: "dish-" + dishIndex });
+      setTimeout(() => this.setData({ scrollIntoId: "" }), 600);
+    };
+    if (activeCategory !== "all") {
+      this.setData({ activeCategory: "all", dishes: allDishes }, () => {
+        setTimeout(scrollToDish, 80);
+      });
+    } else {
+      setTimeout(scrollToDish, 80);
+    }
   },
 
   onOrderItemTap(e: WechatMiniprogram.TouchEvent) {

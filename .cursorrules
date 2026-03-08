@@ -155,7 +155,7 @@ van-button, van-cell, van-cell-group, van-icon, van-image, van-loading, van-toas
 
 ## App Config (app.json)
 - lazyCodeLoading: "requiredComponents"
-- enableShareAppMessage, enableShareTimeline: true
+- 分享：在页面中定义 onShareAppMessage / onShareTimeline，无需 page.json 配置
 - permission.scope.userLocation: 用于识别城市，提供更精准菜品文化背景
 
 ## Don'ts

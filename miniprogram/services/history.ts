@@ -60,7 +60,7 @@ export async function getRecentRecords(
         timeText: formatTime(r.createdAt),
         dishSummary: dishesForDisplay
           .slice(0, 3)
-          .map((d) => d.briefCN || d.originalName)
+          .map((d) => d.originalName || d.briefCN)
           .filter(Boolean)
           .join("、") || "无菜品",
         dishCount: dishesForDisplay.length,

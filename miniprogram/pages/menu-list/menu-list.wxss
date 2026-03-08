@@ -73,11 +73,35 @@
 .menu-list__error {
   padding: 100rpx 32rpx;
   text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 24rpx;
+}
+
+.menu-list__error-icon {
+  font-size: 120rpx;
+  line-height: 1;
+  opacity: 0.8;
 }
 
 .menu-list__error-text {
   font-size: 32rpx;
   color: var(--text-sub);
+  line-height: 1.6;
+  max-width: 560rpx;
+}
+
+.menu-list__error-btn {
+  margin-top: 16rpx;
+  padding: 24rpx 64rpx;
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-dark) 100%);
+  color: #fff;
+  font-size: 32rpx;
+  font-weight: 600;
+  border-radius: 56rpx;
+  box-shadow: 0 8rpx 24rpx rgba(255, 149, 0, 0.25);
+  transition: all 0.3s ease;
 }
 
 .menu-list__container {
@@ -266,6 +290,11 @@
   align-items: baseline;
   justify-content: space-between;
   gap: 16rpx;
+}
+
+.dish-name-wrap {
+  flex: 1;
+  min-width: 0;
 }
 
 .dish-name {
@@ -749,6 +778,65 @@
   -webkit-backdrop-filter: blur(40px) saturate(150%);
   border-top: 1px solid rgba(255, 255, 255, 0.4);
   z-index: 100;
+}
+
+/* 本次推荐卡片 */
+.recommendations-card {
+  margin-bottom: 14rpx;
+  padding: 22rpx 24rpx;
+  background: var(--menu-card-bg);
+  border: 1px solid var(--menu-card-border);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--menu-card-shadow);
+}
+
+.recommendations-header {
+  margin-bottom: 16rpx;
+}
+
+.recommendations-title {
+  font-size: 30rpx;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.recommendations-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10rpx;
+}
+
+.recommendation-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16rpx 18rpx;
+  background: rgba(255, 255, 255, 0.7);
+  border-radius: 24rpx;
+  border: 1px solid rgba(255, 255, 255, 0.62);
+  transition: background 0.2s ease;
+}
+
+.recommendation-item--hover {
+  background: rgba(255, 159, 10, 0.08);
+  border-color: rgba(255, 159, 10, 0.3);
+}
+
+.recommendation-name {
+  flex: 1;
+  font-size: 28rpx;
+  font-weight: 600;
+  color: var(--text-main);
+  margin-right: 16rpx;
+}
+
+.recommendation-reason {
+  font-size: 24rpx;
+  color: var(--text-sub);
+  flex-shrink: 0;
+  max-width: 260rpx;
+  text-align: right;
 }
 
 .btn-primary {

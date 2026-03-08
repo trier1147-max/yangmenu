@@ -3,18 +3,23 @@ import type { AppOption } from "../../app";
 import {
   recognizeManualDishes,
   recognizeMenuBase64Stream,
-  recognizeMenuBatchStream,
   recognizeMenuStream,
   uploadImage,
 } from "../../services/ai";
+import { isDataExceedMaxSizeError } from "../../services/cloud";
 import { deleteRecordById, getRecentRecords } from "../../services/history";
 import { checkUsage, consumeUsage, addShareBonus } from "../../services/user";
 import type { RecentRecordItem } from "../../services/history";
 
 const MAX_IMAGE_SIZE_BYTES = 4 * 1024 * 1024; // 4MB
 const ALLOWED_EXTENSIONS = ["jpg", "jpeg", "png"];
-/** base64 超限时兜底走上传流式；降低到 150KB 避免边界情况（某些图片压缩效果差）*/
-const BASE64_CALL_LIMIT = 150_000;
+/**
+ * base64 路径：仅对极小图片（≤20K chars ≈ 15KB binary）启用，省去云存储上传耗时。
+ * 20K 是非常保守的阈值——远低于之前导致网关拦截的大小，几乎不会触发 callFunction 超限。
+ * 超过阈值的图片（绝大多数）自动走上传路径，保持稳定性。
+ */
+const SKIP_BASE64_PATH = false;
+const BASE64_CALL_LIMIT = 30_000;
 
 interface IndexData {
   recentRecords: RecentRecordItem[];
@@ -115,7 +120,7 @@ Page({
       const res = await new Promise<WechatMiniprogram.ChooseMediaSuccessCallbackResult>(
         (resolve, reject) => {
           wx.chooseMedia({
-            count: 6,
+            count: 1,
             mediaType: ["image"],
             sourceType: ["camera"],
             sizeType: ["compressed"],
@@ -164,7 +169,7 @@ Page({
       const res = await new Promise<WechatMiniprogram.ChooseMediaSuccessCallbackResult>(
         (resolve, reject) => {
           wx.chooseMedia({
-            count: 6,
+            count: 1,
             mediaType: ["image"],
             sourceType: ["album"],
             sizeType: ["compressed"],
@@ -344,33 +349,23 @@ Page({
 
       // 压缩所有图片（偏小以控制 base64 体积，确保 callFunction 不超限）
       const compressedPaths = await Promise.all(
-        filePaths.map(async (path, index) => {
-          const originalFile = files[index];
-          console.log(`[DEBUG] Original image ${index}: size=${originalFile.size}B, type=${originalFile.fileType}`);
-
+        filePaths.map(async (path) => {
           try {
-            // 尝试使用 compressedWidth（需要基础库 2.26.0+）
+            // quality:25 + width:700 上传体积更小，对 OCR 识别率无显著影响
             const c = await wx.compressImage({
               src: path,
-              quality: 40,
-              compressedWidth: 800
+              quality: 25,
+              compressedWidth: 700,
             });
-            // 检查压缩后的文件大小
-            try {
-              const fs = wx.getFileSystemManager();
-              const stats = fs.statSync(c.tempFilePath);
-              console.log(`[DEBUG] Compressed image ${index}: size=${stats.size}B`);
-            } catch (e) {}
             return c.tempFilePath;
           } catch (e: any) {
             // 降级：如果 compressedWidth 不支持，只用 quality 压缩
-            console.warn("compressImage with width failed, fallback to quality only:", e);
+            console.warn("[DEBUG] compressImage with width failed, fallback:", e);
             try {
-              const c = await wx.compressImage({ src: path, quality: 40 });
+              const c = await wx.compressImage({ src: path, quality: 25 });
               return c.tempFilePath;
             } catch (e2) {
-              // 如果压缩完全失败，返回原图（后续会通过上传路径处理）
-              console.error("compressImage completely failed, using original:", e2);
+              console.error("[DEBUG] Compression failed, using original:", e2);
               return path;
             }
           }
@@ -379,54 +374,65 @@ Page({
 
       let recordId: string | null = null;
       let lastError = "";
+      let base64: string | null = null;
 
-      if (compressedPaths.length === 1) {
+      {
         let useBase64 = false;
 
-        // 尝试 base64 路径：快速但可能因体积/格式失败
-        try {
-          const fs = wx.getFileSystemManager();
-          const base64 = fs.readFileSync(compressedPaths[0], "base64") as string;
-
-          console.log(`[DEBUG] base64 size: ${base64.length} chars, limit: ${BASE64_CALL_LIMIT}`);
-
-          if (base64.length <= BASE64_CALL_LIMIT) {
-            const streamRes = await recognizeMenuBase64Stream(base64);
-            if (streamRes.recordId) {
-              recordId = streamRes.recordId;
-              useBase64 = true;
-              console.log("[DEBUG] base64 path success");
+        // base64 路径：仅对极小图片尝试，网关拦截风险极低；失败则静默回落上传
+        if (!SKIP_BASE64_PATH) {
+          try {
+            const fs = wx.getFileSystemManager();
+            base64 = fs.readFileSync(compressedPaths[0], "base64") as string;
+            if (base64.length <= BASE64_CALL_LIMIT) {
+              console.log(`[DEBUG] base64路径：${base64.length} chars，尝试跳过上传`);
+              const streamRes = await recognizeMenuBase64Stream(base64);
+              if (streamRes.recordId) {
+                recordId = streamRes.recordId;
+                useBase64 = true;
+              }
             } else {
-              console.warn("[DEBUG] base64 path failed:", streamRes.error);
+              console.log(`[DEBUG] base64太大(${base64.length} > ${BASE64_CALL_LIMIT})，走上传路径`);
             }
-            // base64 失败时静默降级，不设置 lastError（让上传路径有机会成功）
-          } else {
-            console.log("[DEBUG] base64 too large, skip to upload path");
-          }
-        } catch (e) {
-          // base64 读取或调用失败，降级到上传路径
-          console.warn("base64 path failed, fallback to upload:", e);
+          } catch (_) {}
         }
 
-        // 降级路径：上传到云存储后识别（更稳定）
+        // 上传路径：上传到云存储后 callFunction 只传 fileID
         if (!recordId) {
-          console.log("[DEBUG] using upload fallback path");
-          const fileID = await uploadImage(compressedPaths[0]);
-          console.log("[DEBUG] upload success, fileID:", fileID);
-          const streamRes = await recognizeMenuStream(fileID);
-          recordId = streamRes.recordId ?? null;
-          if (streamRes.recordId) {
-            console.log("[DEBUG] upload path success");
-          } else {
-            console.error("[DEBUG] upload path failed:", streamRes.error);
+          console.log("[DEBUG] 走上传路径");
+          const uploadStartTime = Date.now();
+          try {
+            const fileID = await uploadImage(compressedPaths[0]);
+            const uploadDuration = Date.now() - uploadStartTime;
+            console.log(`[DEBUG] 📤 Upload success in ${uploadDuration}ms, fileID:`, fileID);
+
+            const callStartTime = Date.now();
+            const streamRes = await recognizeMenuStream(fileID);
+            const callDuration = Date.now() - callStartTime;
+
+            recordId = streamRes.recordId ?? null;
+            if (streamRes.recordId) {
+              console.log(`[DEBUG] ✅ Upload path SUCCESS (call took ${callDuration}ms)`);
+            } else {
+              console.error(`[DEBUG] ❌ Upload path FAILED after ${callDuration}ms:`, streamRes.error);
+            }
+            if (streamRes.error) lastError = streamRes.error;
+          } catch (e: any) {
+            const totalDuration = Date.now() - uploadStartTime;
+            console.error(`[DEBUG] ❌ Upload path EXCEPTION after ${totalDuration}ms:`, e?.errMsg || e?.message || e);
+            console.error("[DEBUG] 📋 Full error object:", e);
+            lastError = e?.errMsg || e?.message || "Upload failed";
           }
-          if (streamRes.error) lastError = streamRes.error;
         }
 
         if (recordId) {
+          console.log("[DEBUG] 🎉 SUCCESS! RecordId:", recordId);
+          console.log(`[DEBUG] 📊 Final path used: ${useBase64 ? 'Base64' : 'Upload'}`);
+
           // base64 路径：entry 不保存 imageFileID，后台补传
           if (useBase64) {
             uploadImage(compressedPaths[0]).then((fileID) => {
+              console.log("[DEBUG] 📤 Background upload completed:", fileID);
               wx.cloud.database().collection("scan_records").doc(recordId!).update({
                 data: { imageFileID: fileID },
               }).catch(() => {});
@@ -454,46 +460,35 @@ Page({
           return;
         }
         lastError = lastError || "识别服务启动失败，请重试";
-      } else {
-        // 多图：上传后走批量流式模式
-        const fileIDs = await Promise.all(
-          compressedPaths.map((path) => uploadImage(path))
-        );
-        const batchRes = await recognizeMenuBatchStream(fileIDs);
-        recordId = batchRes.recordId ?? null;
-        if (batchRes.error) lastError = batchRes.error;
-        if (recordId) {
-          const app = getApp() as AppOption;
-          app.globalData.pendingRecord = {
-            _id: recordId,
-            _openid: "",
-            imageFileID: fileIDs[0],
-            dishes: [],
-            partialDishes: [],
-            status: "processing",
-            createdAt: new Date(),
-          };
-          clearInterval(this.loadingTimer);
-          this.setData({ loading: false });
-          wx.navigateTo({
-            url: `/pages/menu-list/menu-list?recordId=${recordId}`,
-          });
-          consumeUsage().catch(() => {});
-          return;
-        } else {
-          lastError = lastError || "识别服务启动失败，请重试";
-        }
       }
 
+      console.error("[DEBUG] ❌❌❌ FINAL FAILURE - No recordId obtained");
+      console.error(`[DEBUG] 📋 Last error: ${lastError}`);
+      console.error("[DEBUG] 💡 All paths failed. Check logs above for details.");
       clearInterval(this.loadingTimer);
       this.setData({ loading: false });
-      Toast.fail(lastError || "识别失败，请重试");
+      // 展示更具体的错误，便于排查；若为 callFunction 超限，提示用户换小图
+      const userMsg =
+        lastError.includes("cloud.callFunction") || isDataExceedMaxSizeError(lastError)
+          ? "图片过大或网络不稳定，请换一张较小的图片重试"
+          : lastError || "识别失败，请重试";
+      Toast.fail(userMsg);
     } catch (e: any) {
-      console.error("recognition failed:", e);
+      console.error("[DEBUG] ❌ Exception caught in handleMediaResult:", e);
+      console.error("[DEBUG] 📋 Exception type:", typeof e);
+      console.error("[DEBUG] 📋 Exception details:", JSON.stringify(e, null, 2));
       clearInterval(this.loadingTimer);
       this.setData({ loading: false });
       const errMsg = e?.errMsg || e?.message || (typeof e === "string" ? e : "");
-      Toast.fail(errMsg || "识别失败，请重试");
+      console.error("[DEBUG] 📋 Final error shown to user:", errMsg);
+      const userMsg =
+        errMsg.includes("cloud.callFunction") || isDataExceedMaxSizeError(errMsg)
+          ? "图片过大或网络不稳定，请换一张较小的图片重试"
+          : errMsg || "识别失败，请重试";
+      Toast.fail(userMsg);
+    } finally {
+      console.log("[DEBUG] === handleMediaResult END ===");
+      this.setData({ isProcessing: false });
     }
   },
 

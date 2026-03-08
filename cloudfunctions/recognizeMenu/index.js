@@ -20,9 +20,9 @@ const OCR_VERSION = "2018-11-19";
 const AI_MODEL = "deepseek-v3.2";
 const AI_HOST = "api.lkeap.cloud.tencent.com";
 const AI_PATH = "/v1/chat/completions";
-const AI_TIMEOUT_MS = 55000;
-const AI_MAX_TOKENS = 3200;
-const OCR_INPUT_MAX_CHARS = 3200;
+const AI_TIMEOUT_MS = 90000; // 从 55s 增加到 90s，应对文字多的菜单
+const AI_MAX_TOKENS = 6000; // 质量优先：15-20 道菜详细描述约需 5500+ tokens
+const OCR_INPUT_MAX_CHARS = 3000; // 质量优先：给 AI 更完整的菜单上下文
 
 const SHARED_HTTP_AGENT = new https.Agent({
   keepAlive: true,
@@ -30,42 +30,77 @@ const SHARED_HTTP_AGENT = new https.Agent({
   timeout: 30000,
 });
 
-const DEEPSEEK_PROMPT = `你是菜单识别与菜品介绍助手。请基于 OCR 文本识别每道菜，并且仅返回 JSON，不要返回 Markdown、解释或多余文字。
+const DEEPSEEK_PROMPT = `你是一个专业的菜单识别助手，帮助中国用户读懂海外餐厅菜单。
 
-【重要】目标用户为中国用户，以下所有面向用户展示的内容必须使用中文，禁止使用英文：
-- description、flavor、recommendation、ingredients、options 的 group/rule/choices 等，全部必须用中文。
+【质量第一 - 最高优先级】
+- 每道菜的 description 至少 2-3 句，说明起源/特色/做法，有背景故事的要写出来
+- flavor 要具体描述（不只是"鲜美"两字），写出层次感
+- recommendation 要说明适合什么口味偏好的人，以及是否推荐第一次来的客人尝试
+- 宁可只处理前 12-15 道主要菜品，也要保证每道菜介绍详尽充实，绝不为凑数量而牺牲质量
 
-返回格式：
+【输出格式】仅返回合法 JSON，不返回 Markdown、解释或任何多余文字：
 {
   "isMenu": true,
   "dishes": [
     {
-      "originalName": "菜单原文菜名",
+      "originalName": "菜单原文菜名（保留原文）",
       "briefCN": "15字内中文概括",
-      "description": "介绍菜品的特色点：起源、特色与做法（2-4句，可含背景由来与主要烹饪方式）",
-      "flavor": "风味与口感（如酸甜苦辣咸、酱香、香辣、鲜、口感醇厚/脆嫩/软糯等）",
-      "recommendation": "适合什么口味偏好的人，以及第一次来是否推荐尝试，一句话建议",
-      "price": "¥38",
+      "description": "菜品介绍：起源、特色与做法（2-4句，纯中文）",
+      "flavor": "具体风味与口感描述，如香辣酥脆、酸甜鲜嫩、浓郁醇厚（纯中文）",
+      "recommendation": "适合什么口味偏好的人，第一次来是否推荐尝试（纯中文）",
+      "price": "原价格格式，如 $8.9 / €12 / ¥38 / £9.5 / ₩15000；无价格返回 \"\"",
       "options": [{"group":"主食","rule":"二选一","choices":["米饭","面条"]}],
-      "ingredients": ["生菜", "番茄"]
+      "ingredients": ["生菜", "番茄", "芝士"]
     }
   ]
 }
 
-要求：
-- 严格返回合法 JSON；字段缺失时用空字符串 "" 或空数组 []。
-- 按菜单上从上到下的顺序排列菜品，不要自行重排。
-- briefCN 必须是中文且不超过 15 个字。
-- description、flavor、recommendation 必须全部使用中文，禁止英文。
-- ingredients 必须全部使用中文食材名（如 生菜、番茄、牛肉、芝士、培根），禁止英文如 lettuce、tomato、beef。
-- options 的 group、rule、choices 必须使用中文。
-- price 尽量保留原币种和格式，如 "¥38" / "38元" / "$8.9"；无价格返回 ""。
-- 重要：每道菜都必须单独包含 price 字段；若菜单为多列（菜名一列、价格一列），请按行对应将价格填入该行的菜品对象中，不要只填第一道。
-- ingredients 提取 2-6 个核心食材；无法判断时返回 []，禁止占位词如 "食材A"、"ingredient 1"。
-- 只根据 OCR 文本合理推断，不要编造明显超出上下文的信息。
-- 若 OCR 文本明显不是菜单（如路牌、广告、文档、书籍、网页等），请返回 {"isMenu": false, "dishes": []}，不要尝试解析菜品。
+【强制中文化】所有面向用户字段必须 100% 纯中文，严禁任何外文：
+- description、flavor、recommendation、ingredients 禁止英/法/德/西/意/日/韩等任何外文
+- 食材：必须用中文（生菜、番茄、牛肉、芝士、培根、罗勒、帕玛森芝士、马苏里拉芝士）
+- 烹饪术语：用中文（煎、炒、炖、烤、蒸），禁止 grilled、rôti、asado、arrosto 等
+- 口味描述：用中文（香辣、鲜甜、浓郁、酥脆），禁止 spicy、épicé、picante 等
+- 专有名词（提拉米苏、凯撒沙拉、帕尼尼等已中文化名称）可保留，周边描述必须中文
+- 无法翻译的生僻外文直接省略，不要保留任何非中文字符
 
-【质量优先】宁可少解析几道菜，也要保证每道菜的介绍充实有意义。若 OCR 文本较长，只处理前 15-20 道菜并给出丰富详尽的 description、flavor、recommendation，不要为凑数量而牺牲质量。description 至少 2-3 句，flavor 和 recommendation 要具体。`;
+❌ 错误："grilled chicken with lettuce and tomato"（英文）
+✅ 正确："烤鸡肉配生菜番茄，香辣酥脆"
+
+❌ 错误："poulet rôti avec salade verte"（法语）
+✅ 正确："烤鸡配生菜沙拉"
+
+❌ 错误："pasta tradizionale italiana con formaggio"（意大利语）
+✅ 正确："传统意大利面配芝士"
+
+【价格规则】
+- 按原币种保留格式：$8.9 / €12 / ¥38 / £9.5 / ₩15000 / 38元
+- 每道菜单独填写 price；多列菜单（菜名一列、价格一列）按行对应填入，不要只填第一道
+- 严禁将卡路里（350kcal、200cal、500卡）、克重（200g）、毫升（500ml）误填为 price
+- 无价格时返回 ""
+
+【菜单判定】
+- 非餐厅菜单（路牌/广告/收据/文档/书籍等）返回 {"isMenu": false, "dishes": []}
+- 只有 1-2 个词，或完全不像食物相关内容，一律返回 {"isMenu": false, "dishes": []}
+
+【仅识别菜品 - 严禁将说明文字当菜品】
+- 只输出真正的食物/饮品名称，严禁将以下内容识别为菜品：
+  - 英文说明、提示、注意事项（如 Allergen information、Gluten-free options、Please contact us、Terms and conditions、Ingredients may vary、Subject to availability）
+  - 宣传语、餐厅简介、过敏原提示、服务费/税率说明、支付方式说明
+  - 联系方式、版权声明、页码、社交媒体账号
+- 若 OCR 文本中夹杂大量非菜品说明，只提取真正的菜名和价格，忽略说明段落
+
+【originalName 规则】
+- originalName 必须保留菜单上的完整菜名，严禁简化为单一食材或主料名
+- 例：菜单写 "Burrata with tomato and basil" → originalName 填 "Burrata with tomato and basil"，不能只填 "Burrata" 或 "布拉塔奶酪"
+- 若 OCR 有拼写错误（Caeaser→Caesar、0/O、l/1 等），可修正 typo，但不得删减、合并或改写菜名
+- description 必须描述「这道菜」的做法与呈现，禁止只介绍某一种食材本身（如只介绍布拉塔奶酪是什么）
+
+【其他规则】
+- 按菜单从上到下顺序排列，不自行重排
+- briefCN 纯中文不超过 15 字
+- ingredients 提取 2-6 个核心食材（中文），无法判断返回 []，禁止"食材A"等占位词
+- 字段缺失用 "" 或 []，只根据 OCR 文本合理推断，不编造超出上下文的信息
+- 最终检查：description/flavor/recommendation/ingredients 中不允许任何拉丁字母、假名、韩文`;
 
 /** 腾讯云 API 3.0 TC3-HMAC-SHA256 签名（无 SDK，减小云函数体积） */
 function signTc3(secretKey, date, service, stringToSign) {
@@ -80,6 +115,10 @@ function signTc3(secretKey, date, service, stringToSign) {
 function extractTextByOcr(imageInput) {
   const useUrl = typeof imageInput === "string" && imageInput.startsWith("http");
   const payloadObj = useUrl ? { ImageUrl: imageInput } : { ImageBase64: imageInput };
+  const inputType = useUrl ? 'URL' : 'Base64';
+  const inputSize = typeof imageInput === 'string' ? imageInput.length : 0;
+  console.log(`[OCR] Starting OCR with ${inputType}, size: ${(inputSize / 1024).toFixed(1)}KB`);
+  const startTime = Date.now();
 
   return new Promise((resolve, reject) => {
     const timestamp = Math.floor(Date.now() / 1000);
@@ -138,14 +177,22 @@ function extractTextByOcr(imageInput) {
           }
           const items = json.Response?.TextDetections || [];
           const text = items.map((t) => t.DetectedText || "").join("\n");
+          const duration = Date.now() - startTime;
+          const textLength = text.trim().length;
+          console.log(`[OCR] ✅ Completed in ${duration}ms, extracted ${textLength} chars (${items.length} text blocks)`);
           resolve(text.trim());
         } catch (e) {
           reject(new Error("OCR 返回解析失败: " + (e.message || String(e))));
         }
       });
     });
-    req.on("error", (e) => reject(new Error("OCR 网络错误: " + (e.message || String(e)))));
-    req.setTimeout(15000, () => {
+    req.on("error", (e) => {
+      const duration = Date.now() - startTime;
+      console.error(`[OCR] ❌ Network error after ${duration}ms:`, e.message);
+      reject(new Error("OCR 网络错误: " + (e.message || String(e))));
+    });
+    req.setTimeout(30000, () => {  // 从 15s 增加到 30s，应对大图/密集文字
+      console.error(`[OCR] ❌ TIMEOUT after 30s (input: ${inputType}, size: ${(inputSize / 1024).toFixed(1)}KB)`);
       req.destroy();
       reject(new Error("OCR 接口超时"));
     });
@@ -182,16 +229,15 @@ function callDeepSeekStream(ocrText, recordId) {
     const ocrResult = optimizeOcrText(ocrText);
     const optimizedText = ocrResult.text ?? ocrResult;
     const truncated = ocrResult.truncated ?? false;
-    const userContent = `菜单 OCR 结果：
-"""
-${optimizedText}
-"""
-${DEEPSEEK_PROMPT}`;
+    const userContent = `请识别以下菜单 OCR 文本并返回 JSON：\n"""\n${optimizedText}\n"""`;
 
     const body = JSON.stringify({
       model: AI_MODEL,
-      messages: [{ role: "user", content: userContent }],
-      temperature: 0.3,
+      messages: [
+        { role: "system", content: DEEPSEEK_PROMPT },
+        { role: "user", content: userContent },
+      ],
+      temperature: 0.5,
       max_tokens: AI_MAX_TOKENS,
       stream: true,
       thinking: { type: "disabled" },
@@ -207,6 +253,8 @@ ${DEEPSEEK_PROMPT}`;
         "Content-Length": Buffer.byteLength(body),
       },
     };
+
+    const defaultCurrency = parser.detectCurrencyFromOcrText(ocrText);
 
     let acc = "";
     let lastPartialCount = 0;
@@ -273,17 +321,17 @@ ${DEEPSEEK_PROMPT}`;
                 acc += content;
                 let partial = parser.parseDishesFallback(acc);
                 if (!partial || partial.length === 0) {
-                  partial = parser.tryParsePartialDishes(acc);
+                  partial = parser.tryParsePartialDishes(acc, defaultCurrency);
                 }
                 if (!partial || partial.length === 0) {
                   try {
-                    partial = parser.parseDishesMinimal(acc) || [];
+                    partial = parser.parseDishesMinimal(acc, defaultCurrency) || [];
                   } catch (_) {}
                 }
                 if (partial && partial.length > 0) {
                   const ocrPrices = parser.extractPricesFromOcrText(ocrText);
                   if (ocrPrices.length > 0) {
-                    partial = parser.applyPricesByIndex(partial, ocrPrices);
+                    partial = parser.applyPricesByIndex(partial, ocrPrices, defaultCurrency);
                   }
                   updatePartial(partial);
                 }
@@ -325,16 +373,15 @@ function callDeepSeekWithText(ocrText) {
   return new Promise((resolve, reject) => {
     const ocrResult = optimizeOcrText(ocrText);
     const optimizedText = ocrResult.text ?? ocrResult;
-    const userContent = `菜单 OCR 结果：
-"""
-${optimizedText}
-"""
-${DEEPSEEK_PROMPT}`;
+    const userContent = `请识别以下菜单 OCR 文本并返回 JSON：\n"""\n${optimizedText}\n"""`;
 
     const body = JSON.stringify({
       model: AI_MODEL,
-      messages: [{ role: "user", content: userContent }],
-      temperature: 0.3,
+      messages: [
+        { role: "system", content: DEEPSEEK_PROMPT },
+        { role: "user", content: userContent },
+      ],
+      temperature: 0.5,
       max_tokens: AI_MAX_TOKENS,
       response_format: { type: "json_object" },
       thinking: { type: "disabled" },
@@ -400,6 +447,11 @@ ${DEEPSEEK_PROMPT}`;
 }
 
 exports.main = async (event) => {
+  // 无条件入口日志：若云控制台完全无日志，说明请求未到达云端（客户端超限/网络失败）
+  const inputType = event.imageBase64 ? "base64" : event.imageFileID ? "fileID" : event.imageFileIDs ? "fileIDs" : event.streamRecordId ? "streamWorker" : event.manualDishNames ? "manual" : "unknown";
+  const payloadSize = event.imageBase64 ? (event.imageBase64.length || 0) : 0;
+  console.log(`[recognizeMenu] 入口 inputType=${inputType} payloadSize=${(payloadSize / 1024).toFixed(1)}KB`);
+
   const {
     imageFileID,
     imageFileIDs,
@@ -408,6 +460,7 @@ exports.main = async (event) => {
     debug = false,
     stream: useStream = false,
     streamRecordId,
+    imageUrl: eventImageUrl,
   } = event;
   const hasManualInput = Array.isArray(manualDishNames) && manualDishNames.length > 0;
 
@@ -454,21 +507,22 @@ exports.main = async (event) => {
       const menuTooLong = finishReason === "length" || ocrTruncated;
       const meta = parser.parseAiResponseMeta(aiText);
       if (meta && meta.isMenu === false) {
-        const msg = "当前图片似乎不是菜单，请拍摄餐厅菜单进行识别";
+        const msg = "这张图片不像是餐厅菜单哦，请对准菜单重新拍摄";
         await records.doc(recordId).update({
           data: { status: "error", errorMessage: msg },
         });
         return { success: false, error: msg };
       }
+      const defaultCurrency = parser.detectCurrencyFromOcrText(ocrText);
       let dishes = [];
       try {
-        dishes = parser.parseDishesFromText(aiText);
+        dishes = parser.parseDishesFromText(aiText, defaultCurrency);
       } catch (parseErr) {
-        dishes = parser.parseDishesMinimal(aiText) || parser.parseDishesFallback(aiText) || [];
+        dishes = parser.parseDishesMinimal(aiText, defaultCurrency) || parser.parseDishesFallback(aiText) || [];
       }
       const ocrPrices = parser.extractPricesFromOcrText(ocrText);
       if (ocrPrices.length > 0) {
-        dishes = parser.applyPricesByIndex(dishes, ocrPrices);
+        dishes = parser.applyPricesByIndex(dishes, ocrPrices, defaultCurrency);
       }
       const updateData = { dishes, status: "done", partialDishes: [] };
       if (menuTooLong) {
@@ -523,15 +577,16 @@ exports.main = async (event) => {
           continue;
         }
 
+        const defaultCurrency = parser.detectCurrencyFromOcrText(ocrText);
         let dishes;
         try {
-          dishes = parser.parseDishesFromText(aiText);
+          dishes = parser.parseDishesFromText(aiText, defaultCurrency);
         } catch (parseErr) {
-          dishes = parser.parseDishesMinimal(aiText) || parser.parseDishesFallback(aiText) || [];
+          dishes = parser.parseDishesMinimal(aiText, defaultCurrency) || parser.parseDishesFallback(aiText) || [];
         }
         const ocrPrices = parser.extractPricesFromOcrText(ocrText);
         if (ocrPrices.length > 0) {
-          dishes = parser.applyPricesByIndex(dishes, ocrPrices);
+          dishes = parser.applyPricesByIndex(dishes, ocrPrices, defaultCurrency);
         }
 
         if (dishes.length > 0) {
@@ -575,14 +630,18 @@ exports.main = async (event) => {
     const recordId = streamRecordId;
     const records = db.collection("scan_records");
     try {
-      const urlRes = await cloud.getTempFileURL({ fileList: [imageFileID] });
-      const fileItem = urlRes?.fileList?.[0];
-      const imageUrl = fileItem?.tempFileURL || fileItem?.temp_file_url;
-      if (!imageUrl || (fileItem?.code && fileItem.code !== "SUCCESS")) {
-        await records.doc(recordId).update({
-          data: { status: "error", errorMessage: "获取图片失败" },
-        });
-        return { success: false, error: "get image url failed" };
+      // entry 已并行获取 imageUrl 并传入，直接使用；否则降级自己获取
+      let imageUrl = eventImageUrl || null;
+      if (!imageUrl) {
+        const urlRes = await cloud.getTempFileURL({ fileList: [imageFileID] });
+        const fileItem = urlRes?.fileList?.[0];
+        imageUrl = fileItem?.tempFileURL || fileItem?.temp_file_url;
+        if (!imageUrl || (fileItem?.code && fileItem.code !== "SUCCESS")) {
+          await records.doc(recordId).update({
+            data: { status: "error", errorMessage: "获取图片失败" },
+          });
+          return { success: false, error: "get image url failed" };
+        }
       }
       const ocrText = await extractTextByOcr(imageUrl);
       if (!ocrText || ocrText.trim().length === 0) {
@@ -598,21 +657,22 @@ exports.main = async (event) => {
       const menuTooLong = finishReason === "length" || ocrTruncated;
       const meta = parser.parseAiResponseMeta(aiText);
       if (meta && meta.isMenu === false) {
-        const msg = "当前图片似乎不是菜单，请拍摄餐厅菜单进行识别";
+        const msg = "这张图片不像是餐厅菜单哦，请对准菜单重新拍摄";
         await records.doc(recordId).update({
           data: { status: "error", errorMessage: msg },
         });
         return { success: false, error: msg };
       }
+      const defaultCurrency = parser.detectCurrencyFromOcrText(ocrText);
       let dishes = [];
       try {
-        dishes = parser.parseDishesFromText(aiText);
+        dishes = parser.parseDishesFromText(aiText, defaultCurrency);
       } catch (parseErr) {
-        dishes = parser.parseDishesMinimal(aiText) || parser.parseDishesFallback(aiText) || [];
+        dishes = parser.parseDishesMinimal(aiText, defaultCurrency) || parser.parseDishesFallback(aiText) || [];
       }
       const ocrPrices = parser.extractPricesFromOcrText(ocrText);
       if (ocrPrices.length > 0) {
-        dishes = parser.applyPricesByIndex(dishes, ocrPrices);
+        dishes = parser.applyPricesByIndex(dishes, ocrPrices, defaultCurrency);
       }
       const updateData = { dishes, status: "done", partialDishes: [] };
       if (menuTooLong) {
@@ -680,22 +740,29 @@ exports.main = async (event) => {
     if (!openid) return { success: false, error: "failed to get openid" };
 
     const records = db.collection("scan_records");
-    const addRes = await records.add({
-      data: {
-        _openid: openid,
-        imageFileID,
-        dishes: [],
-        partialDishes: [],
-        status: "processing",
-        createdAt: db.serverDate(),
-      },
-    });
+
+    // 并行：创建 DB 记录 + 获取图片 CDN URL，省去 worker 侧重复调用 getTempFileURL
+    const [addRes, urlRes] = await Promise.all([
+      records.add({
+        data: {
+          _openid: openid,
+          imageFileID,
+          dishes: [],
+          partialDishes: [],
+          status: "processing",
+          createdAt: db.serverDate(),
+        },
+      }),
+      cloud.getTempFileURL({ fileList: [imageFileID] }).catch(() => null),
+    ]);
     const recordId = addRes._id ?? addRes.id;
+    const imageUrl = urlRes?.fileList?.[0]?.tempFileURL || urlRes?.fileList?.[0]?.temp_file_url || null;
 
     cloud
       .callFunction({
         name: "recognizeMenu",
-        data: { imageFileID, streamRecordId: recordId },
+        // 若拿到了 URL 就直接传给 worker，worker 可跳过 getTempFileURL
+        data: { imageFileID, imageUrl, streamRecordId: recordId },
       })
       .catch(async (e) => {
         console.error("Single imageFileID stream worker invocation failed:", e);
@@ -855,14 +922,15 @@ exports.main = async (event) => {
 
     const meta = parser.parseAiResponseMeta(aiText);
     if (meta && meta.isMenu === false) {
-      return { success: false, error: "当前图片似乎不是菜单，请拍摄餐厅菜单进行识别" };
+      return { success: false, error: "这张图片不像是餐厅菜单哦，请对准菜单重新拍摄" };
     }
 
+    const defaultCurrency = parser.detectCurrencyFromOcrText(ocrText);
     let dishes;
     try {
-      dishes = parser.parseDishesFromText(aiText);
+      dishes = parser.parseDishesFromText(aiText, defaultCurrency);
     } catch (parseErr) {
-      dishes = parser.parseDishesMinimal(aiText);
+      dishes = parser.parseDishesMinimal(aiText, defaultCurrency);
       if (dishes.length === 0) {
         dishes = parser.parseDishesFallback(aiText);
       }
@@ -882,7 +950,7 @@ exports.main = async (event) => {
     }
     const ocrPrices = parser.extractPricesFromOcrText(ocrText);
     if (ocrPrices.length > 0) {
-      dishes = parser.applyPricesByIndex(dishes, ocrPrices);
+      dishes = parser.applyPricesByIndex(dishes, ocrPrices, defaultCurrency);
     }
 
     if (dishes.length === 0) {

@@ -5,12 +5,17 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const toast_1 = __importDefault(require("@vant/weapp/toast/toast"));
 const ai_1 = require("../../services/ai");
+const cloud_1 = require("../../services/cloud");
 const history_1 = require("../../services/history");
 const user_1 = require("../../services/user");
 const MAX_IMAGE_SIZE_BYTES = 4 * 1024 * 1024; // 4MB
 const ALLOWED_EXTENSIONS = ["jpg", "jpeg", "png"];
-/** base64 超限时兜底走上传流式；设 500KB 确保绝大多数图走 base64 主路径 */
-const BASE64_CALL_LIMIT = 500000;
+/**
+ * base64 路径：仅对极小图片（≤30K chars ≈ 22KB binary）启用，省去云存储上传耗时。
+ * 30K 是保守阈值——超过阈值的图片自动走上传路径，保持稳定性。
+ */
+const SKIP_BASE64_PATH = false;
+const BASE64_CALL_LIMIT = 30000;
 /** Validate image files: size <= 4MB, format jpg/jpeg/png. Returns error message or null if valid. */
 function validateImageFiles(files) {
     if (!files || files.length === 0)
@@ -51,8 +56,6 @@ Page({
     },
     loadingTimer: 0,
     onShow() {
-        // 用户从相机/相册返回但未选图时，wx.chooseMedia 可能不回调，导致 isProcessing 一直为 true。
-        // 此时 loading 为 false（尚未进入 handleMediaResult），可安全重置。
         if (this.data.isProcessing && !this.data.loading) {
             this.setData({ isProcessing: false });
         }
@@ -81,14 +84,13 @@ Page({
         try {
             const res = await new Promise((resolve, reject) => {
                 wx.chooseMedia({
-                    count: 6,
+                    count: 1,
                     mediaType: ["image"],
                     sourceType: ["camera"],
-                    sizeType: ["original"],
+                    sizeType: ["compressed"],
                     success: resolve,
                     fail: reject,
                     complete: () => {
-                        // 选图界面关闭时（含左滑返回）确保可再次点击
                         if (this.data.isProcessing && !this.data.loading) {
                             this.setData({ isProcessing: false });
                         }
@@ -109,7 +111,7 @@ Page({
         catch (e) {
             const errMsg = e?.errMsg || e?.message || (typeof e === "string" ? e : "");
             if (errMsg.includes("cancel"))
-                return; // 用户主动取消，静默返回
+                return;
             clearInterval(this.loadingTimer);
             this.setData({ loading: false });
             toast_1.default.fail(errMsg || "操作失败，请重试");
@@ -129,14 +131,13 @@ Page({
         try {
             const res = await new Promise((resolve, reject) => {
                 wx.chooseMedia({
-                    count: 6,
+                    count: 1,
                     mediaType: ["image"],
                     sourceType: ["album"],
-                    sizeType: ["original"],
+                    sizeType: ["compressed"],
                     success: resolve,
                     fail: reject,
                     complete: () => {
-                        // 选图界面关闭时（含左滑返回）确保可再次点击
                         if (this.data.isProcessing && !this.data.loading) {
                             this.setData({ isProcessing: false });
                         }
@@ -157,7 +158,7 @@ Page({
         catch (e) {
             const errMsg = e?.errMsg || e?.message || (typeof e === "string" ? e : "");
             if (errMsg.includes("cancel"))
-                return; // 用户主动取消，静默返回
+                return;
             clearInterval(this.loadingTimer);
             this.setData({ loading: false });
             toast_1.default.fail(errMsg || "操作失败，请重试");
@@ -223,7 +224,7 @@ Page({
             wx.navigateTo({
                 url: `/pages/menu-list/menu-list?recordId=${result.recordId}`,
             });
-            (0, user_1.consumeUsage)().catch(() => { }); // 后台消耗，不阻塞跳转
+            (0, user_1.consumeUsage)().catch(() => { });
         }
         catch (e) {
             this.setData({ loading: false });
@@ -237,7 +238,6 @@ Page({
     /** 解析手动输入的菜名，支持中英文逗号、分号、顿号、换行分隔 */
     parseManualNames(text) {
         const normalized = text.replace(/[\r\t]/g, " ");
-        // 中英文逗号(，,)、分号(；;)、顿号(、)均可分隔
         const parts = normalized
             .split(/[\n,;\uFF0C\uFF1B\u3001]+/)
             .map((s) => s.trim())
@@ -283,31 +283,68 @@ Page({
         }, 3000);
         try {
             const filePaths = files.map((f) => f.tempFilePath);
-            // 压缩所有图片（偏小以控制 base64 体积，确保 callFunction 不超限）
+            // quality:25 + width:700，体积更小，对 OCR 识别率无显著影响
             const compressedPaths = await Promise.all(filePaths.map(async (path) => {
-                const c = await wx.compressImage({ src: path, quality: 40, compressedWidth: 800 });
-                return c.tempFilePath;
+                try {
+                    const c = await wx.compressImage({ src: path, quality: 25, compressedWidth: 700 });
+                    return c.tempFilePath;
+                }
+                catch (e) {
+                    // 降级：compressedWidth 不支持时只用 quality
+                    console.warn("[DEBUG] compressImage with width failed, fallback:", e);
+                    try {
+                        const c = await wx.compressImage({ src: path, quality: 25 });
+                        return c.tempFilePath;
+                    }
+                    catch (e2) {
+                        console.error("[DEBUG] Compression failed, using original:", e2);
+                        return path;
+                    }
+                }
             }));
             let recordId = null;
             let lastError = "";
-            if (compressedPaths.length === 1) {
-                const fs = wx.getFileSystemManager();
-                const base64 = fs.readFileSync(compressedPaths[0], "base64");
-                const useBase64 = base64.length <= BASE64_CALL_LIMIT;
-                if (useBase64) {
-                    const streamRes = await (0, ai_1.recognizeMenuBase64Stream)(base64);
-                    recordId = streamRes.recordId ?? null;
-                    if (streamRes.error)
-                        lastError = streamRes.error;
+            let base64 = null;
+            {
+                let useBase64 = false;
+                // base64 路径：仅对极小图片尝试，网关拦截风险极低；失败则静默回落上传
+                if (!SKIP_BASE64_PATH) {
+                    try {
+                        const fs = wx.getFileSystemManager();
+                        base64 = fs.readFileSync(compressedPaths[0], "base64");
+                        if (base64.length <= BASE64_CALL_LIMIT) {
+                            console.log(`[DEBUG] base64路径：${base64.length} chars，尝试跳过上传`);
+                            const streamRes = await (0, ai_1.recognizeMenuBase64Stream)(base64);
+                            if (streamRes.recordId) {
+                                recordId = streamRes.recordId;
+                                useBase64 = true;
+                            }
+                        }
+                        else {
+                            console.log(`[DEBUG] base64太大(${base64.length} > ${BASE64_CALL_LIMIT})，走上传路径`);
+                        }
+                    }
+                    catch (_) { }
                 }
-                else {
-                    const fileID = await (0, ai_1.uploadImage)(compressedPaths[0]);
-                    const streamRes = await (0, ai_1.recognizeMenuStream)(fileID);
-                    recordId = streamRes.recordId ?? null;
-                    if (streamRes.error)
-                        lastError = streamRes.error;
+                // 上传路径：上传到云存储后 callFunction 只传 fileID
+                if (!recordId) {
+                    console.log("[DEBUG] 走上传路径");
+                    const uploadStartTime = Date.now();
+                    try {
+                        const fileID = await (0, ai_1.uploadImage)(compressedPaths[0]);
+                        console.log(`[DEBUG] 📤 Upload success in ${Date.now() - uploadStartTime}ms`);
+                        const streamRes = await (0, ai_1.recognizeMenuStream)(fileID);
+                        recordId = streamRes.recordId ?? null;
+                        if (streamRes.error)
+                            lastError = streamRes.error;
+                    }
+                    catch (e) {
+                        console.error(`[DEBUG] ❌ Upload path EXCEPTION:`, e?.errMsg || e?.message || e);
+                        lastError = e?.errMsg || e?.message || "Upload failed";
+                    }
                 }
                 if (recordId) {
+                    // base64 路径：后台补传图片 fileID
                     if (useBase64) {
                         (0, ai_1.uploadImage)(compressedPaths[0]).then((fileID) => {
                             wx.cloud.database().collection("scan_records").doc(recordId).update({
@@ -315,11 +352,19 @@ Page({
                             }).catch(() => { });
                         }).catch(() => { });
                     }
-                    const record = await this.pollForFirstDish(recordId);
+                    // 立即跳转，让详情页轮询展示流式菜品
                     clearInterval(this.loadingTimer);
                     this.setData({ loading: false });
                     const app = getApp();
-                    app.globalData.pendingRecord = record;
+                    app.globalData.pendingRecord = {
+                        _id: recordId,
+                        _openid: "",
+                        imageFileID: "",
+                        dishes: [],
+                        partialDishes: [],
+                        status: "processing",
+                        createdAt: new Date(),
+                    };
                     wx.navigateTo({
                         url: `/pages/menu-list/menu-list?recordId=${recordId}`,
                     });
@@ -328,86 +373,25 @@ Page({
                 }
                 lastError = lastError || "识别服务启动失败，请重试";
             }
-            else {
-                // 多图：上传后走批量流式模式
-                const fileIDs = await Promise.all(compressedPaths.map((path) => (0, ai_1.uploadImage)(path)));
-                const batchRes = await (0, ai_1.recognizeMenuBatchStream)(fileIDs);
-                recordId = batchRes.recordId ?? null;
-                if (batchRes.error)
-                    lastError = batchRes.error;
-                if (recordId) {
-                    const app = getApp();
-                    app.globalData.pendingRecord = {
-                        _id: recordId,
-                        _openid: "",
-                        imageFileID: fileIDs[0],
-                        dishes: [],
-                        partialDishes: [],
-                        status: "processing",
-                        createdAt: new Date(),
-                    };
-                    clearInterval(this.loadingTimer);
-                    this.setData({ loading: false });
-                    wx.navigateTo({
-                        url: `/pages/menu-list/menu-list?recordId=${recordId}`,
-                    });
-                    (0, user_1.consumeUsage)().catch(() => { });
-                    return;
-                }
-                else {
-                    lastError = lastError || "识别服务启动失败，请重试";
-                }
-            }
             clearInterval(this.loadingTimer);
             this.setData({ loading: false });
-            toast_1.default.fail(lastError || "识别失败，请重试");
+            const userMsg = lastError.includes("cloud.callFunction") || (0, cloud_1.isDataExceedMaxSizeError)(lastError)
+                ? "图片过大或网络不稳定，请换一张较小的图片重试"
+                : lastError || "识别失败，请重试";
+            toast_1.default.fail(userMsg);
         }
         catch (e) {
-            console.error("recognition failed:", e);
             clearInterval(this.loadingTimer);
             this.setData({ loading: false });
             const errMsg = e?.errMsg || e?.message || (typeof e === "string" ? e : "");
-            toast_1.default.fail(errMsg || "识别失败，请重试");
+            const userMsg = errMsg.includes("cloud.callFunction") || (0, cloud_1.isDataExceedMaxSizeError)(errMsg)
+                ? "图片过大或网络不稳定，请换一张较小的图片重试"
+                : errMsg || "识别失败，请重试";
+            toast_1.default.fail(userMsg);
         }
-    },
-    /** 在加载页轮询，等首道菜出现或处理完成后返回记录 */
-    pollForFirstDish(recordId) {
-        return new Promise((resolve) => {
-            const MAX_WAIT = 60000;
-            const INTERVAL = 600;
-            const start = Date.now();
-            const check = async () => {
-                try {
-                    const record = await (0, history_1.getRecordById)(recordId);
-                    if (record) {
-                        const raw = record;
-                        const partialCount = raw.partialDishes?.length ?? 0;
-                        const dishCount = record.dishes?.length ?? 0;
-                        const status = raw.status ?? "processing";
-                        if (partialCount > 0 || dishCount > 0 || status === "done" || status === "error") {
-                            // 透传 DB 原始字段，保留 menuTooLongHint、errorMessage 等
-                            resolve(Object.assign({}, raw, { _id: recordId }));
-                            return;
-                        }
-                    }
-                }
-                catch (_) { }
-                if (Date.now() - start > MAX_WAIT) {
-                    resolve({
-                        _id: recordId,
-                        _openid: "",
-                        imageFileID: "",
-                        dishes: [],
-                        partialDishes: [],
-                        status: "processing",
-                        createdAt: new Date(),
-                    });
-                    return;
-                }
-                setTimeout(check, INTERVAL);
-            };
-            check();
-        });
+        finally {
+            this.setData({ isProcessing: false });
+        }
     },
     onRecordTap(e) {
         const ds = e.currentTarget.dataset;

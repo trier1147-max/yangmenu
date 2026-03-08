@@ -43,4 +43,8 @@
     <text class="empty-emoji">📥</text>
     <text class="empty-text">还没拍过菜单，去吃顿好的吧！</text>
   </view>
+
+  <view wx:if="{{list.length > 0}}" class="clear-all-wrap">
+    <button class="clear-all-btn" bindtap="onClearAll">清空所有记录</button>
+  </view>
 </view>

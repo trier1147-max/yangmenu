@@ -11,7 +11,11 @@
   />
 
   <view wx:elif="{{error}}" class="menu-list__error">
+    <view class="menu-list__error-icon">📷</view>
     <text class="menu-list__error-text">{{error}}</text>
+    <view class="menu-list__error-btn" bindtap="onRetakePhoto" hover-class="hover-scale">
+      重新拍照
+    </view>
   </view>
 
   <view wx:else class="menu-list__container">
@@ -37,13 +41,12 @@
       scroll-with-animation="true"
       enhanced="true"
     >
-      <view wx:if="{{processing || timeoutHint || menuTooLongHint}}" class="menu-list__status card">
+      <view wx:if="{{processing || timeoutHint}}" class="menu-list__status card">
         <view wx:if="{{processing}}" class="menu-list__status-row">
           <text class="menu-list__status-emoji">👨‍🍳</text>
           <text class="menu-list__status-text">{{allDishes.length > 0 ? '正在识别中，已解析 ' + allDishes.length + ' 道菜' : '正在识别第一道菜...'}}</text>
         </view>
         <text wx:if="{{timeoutHint}}" class="menu-list__timeout-text">{{timeoutHint}}</text>
-        <text wx:if="{{menuTooLongHint && !processing}}" class="menu-list__menutoolong-hint">{{menuTooLongHint}}</text>
       </view>
 
       <view class="header-card card" wx:if="{{imageFileID}}">
@@ -117,7 +120,9 @@
           <view class="dish-header" hover-class="hover-bg">
             <view class="dish-info">
               <view class="dish-name-row">
-                <text class="dish-name">{{item.originalName}}</text>
+                <view class="dish-name-wrap">
+                  <text class="dish-name">{{item.originalName}}</text>
+                </view>
                 <text wx:if="{{item.detail && item.detail.price}}" class="dish-price">{{item.detail.price}}</text>
               </view>
               <view class="dish-brief-row">
@@ -189,6 +194,30 @@
           </view>
         </view>
       </view>
+
+      <!-- 本次推荐：加载完成后出现在列表底部 -->
+      <view wx:if="{{recommendations && recommendations.length && !processing}}" class="recommendations-card card">
+        <view class="recommendations-header">
+          <text class="recommendations-title">⭐ 本次推荐</text>
+        </view>
+        <view class="recommendations-list">
+          <view
+            wx:for="{{recommendations}}"
+            wx:key="dishIndex"
+            class="recommendation-item"
+            hover-class="recommendation-item--hover"
+            hover-start-time="30"
+            hover-stay-time="120"
+            data-index="{{item.dishIndex}}"
+            bindtap="onRecommendationTap"
+          >
+            <text class="recommendation-name">{{item.dishName}}</text>
+            <text class="recommendation-reason">{{item.reason}}</text>
+          </view>
+        </view>
+      </view>
+
+      <text wx:if="{{menuTooLongHint && !processing}}" class="menu-list__menutoolong-hint">{{menuTooLongHint}}</text>
 
       <view class="menu-list__bottom-pad" wx:if="{{showOrderBar || (allDishes.length > 0 && !processing && !error && !showOrderBar)}}"></view>
     </scroll-view>
